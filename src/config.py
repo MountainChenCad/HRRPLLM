@@ -1,67 +1,79 @@
 import os
 
-# --- LLM API 配置 ---
-# 重要: 请将 "YOUR_API_KEY_HERE" 替换为您的真实 OpenAI API 密钥
-# 或者，如果您使用其他LLM提供商或本地模型，请相应修改 llm_embedder.py
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "YOUR_API_KEY_HERE")
-LLM_PARAMS = {
-    "provider": "openai",  # 'openai' 或 'huggingface_local' (huggingface_local 示例)
-    "model_name": "text-embedding-ada-002",  # OpenAI 嵌入模型
-    # "model_name": "sentence-transformers/all-MiniLM-L6-v2", # Hugging Face 本地模型示例
-    "batch_size": 16, # 对于某些API或本地模型，批处理可以提速
+# --- 数据集配置 ---
+AVAILABLE_DATASETS = {
+    "simulated": {
+        "path": "datasets/simulated_hrrp",
+        "data_var": "CoHH",
+        "original_len": 1000,
+        "max_samples_to_load": 300 # 保持较小以测试
+    },
+    # "measured": { # 如果有实测数据，取消注释并配置
+    #     "path": "datasets/measured_hrrp",
+    #     "data_var": "data",
+    #     "original_len": 500,
+    #     "max_samples_to_load": 100
+    # }
+}
+TARGET_HRRP_LENGTH = 1000 
+PREPROCESS_MAT_TO_NPY = True # 首次运行或更改max_samples_to_load时设为True
+PROCESSED_DATA_DIR = "data_processed"
+TEST_SPLIT_SIZE = 0.3 # 元训练集 vs 元测试集
+RANDOM_STATE = 42
+
+# --- 散射中心提取配置 ---
+SCATTERING_CENTER_EXTRACTION = {
+    "enabled": True, 
+    "method": "peak_detection", 
+    "peak_prominence": 0.15,     
+    "peak_min_distance": 5,     
+    "max_centers_to_keep": 10,  
+    "normalize_hrrp_before_extraction": True, 
+    "normalization_type_for_hrrp": "max"
 }
 
-# --- 数据集路径 ---
-BASE_DATA_PATH = "datasets"
-SIMULATED_DATA_PATH = os.path.join(BASE_DATA_PATH, "simulated_hrrp")
-MEASURED_DATA_PATH = os.path.join(BASE_DATA_PATH, "measured_hrrp")
-
-# --- 结果保存路径 ---
-RESULTS_BASE_PATH = "results"
-
-# --- HRRP 预处理配置 ---
-# 仿真数据原始长度1000，实测数据原始长度500
-# 我们将实测数据补零到与仿真数据一致的长度，或统一到一个新长度
-TARGET_HRRP_LENGTH = 1000 # 所有HRRP将被处理到的目标长度
-
-PREPROCESSING = {
-    "normalize": True,             # 是否进行幅度归一化 (True/False for ablation)
-    "normalization_type": "max",   # "max" 或 "energy"
-    "precision": 3,                # 数值转换为文本时的精度 (小数点后位数)
-    "use_space_separator": True,   # 数字间是否使用空格分隔 (True/False for ablation)
-                                   # True: "7 5 3", False: "753"
-    "value_separator": ", ",       # HRRP值在文本序列中的分隔符
+# --- 散射中心文本编码配置 ---
+SCATTERING_CENTER_ENCODING = {
+    "format": "list_of_dicts", 
+    "precision_pos": 0,        
+    "precision_amp": 3,        
+    "center_separator": "; ",  
+    "pos_amp_separator": ":",  
 }
 
-# --- 分类器配置 ---
-CLASSIFIER_PARAMS = {
-    "type": "knn",  # 'knn', 'svm', 'logistic_regression' (for ablation)
-    "knn_neighbors": 5,
-    "svm_kernel": "rbf",
-    "svm_c": 1.0,
-    "test_size": 0.3, # 训练集测试集划分比例
-    "random_state": 42
+# --- FSL Episode/Task 和 Prompt 示例选择配置 ---
+FSL_TASK_SETUP = {
+    "enabled": True,  # <--- 确保这个键存在
+    # N-Way: 将使用数据集中所有唯一类别作为 "N"
+    "k_shots_for_prompt_from_task_support": 0, # 为每个类别从元训练集中随机选择K个样本作为Prompt示例
+                                       # 如果设为0, 则执行Zero-Shot (仅上下文和查询)
+    "similarity_metric": "euclidean_on_sc",    # "dtw_on_hrrp", "euclidean_on_hrrp", "euclidean_on_sc"
+    "sc_feature_type_for_similarity": "pos_amp_flat" # 如果metric是 'euclidean_on_sc'
 }
 
-# --- 基线方法配置 ---
-BASELINE_CLASSIFIER_PARAMS = {
-    "type": "svm", # 使用原始HRRP（可能归一化后）作为特征的基线
-    "svm_kernel": "rbf",
-    "svm_c": 1.0,
+# --- LLM API 与 Prompt 配置 ---
+# DEEPSEEK API 配置
+OPENAI_API_KEY = os.getenv("DEEPSEEK_API_KEY", "sk-59f809e831cf4859935d949b41985ae8") # 使用您的DeepSeek Key
+OPENAI_PROXY_BASE_URL = "https://api.deepseek.com" # DeepSeek API Base URL
+
+LLM_CALLER_PARAMS = {
+    # "model_name": "gpt-4o-mini", # 旧的OpenAI模型
+    "model_name": "deepseek-chat", # 或者 deepseek-coder, 根据DeepSeek文档选择合适的模型
+    "temperature": 1.0, # DeepSeek的temperature可能需要调整，1.0对于分类来说太高了
+    "top_p": 1.0,
+    "max_tokens_completion": 200, 
+    "frequency_penalty": 0.0,
+    "presence_penalty": 0.0,
+    "api_retry_delay": 5,       
+    "max_retries": 3            
 }
+LIMIT_TEST_SAMPLES = 20 # 大幅减少测试样本以便快速调试DeepSeek API调用
 
+# --- 实验结果保存 ---
+RESULTS_BASE_DIR = "results"
 
-# --- 可视化配置 ---
-VISUALIZATION = {
-    "tsne_perplexity": 30,
-    "tsne_n_iter": 1000,
+# --- 基线模型配置 ---
+RUN_BASELINE_SVM = True # 是否运行基线
+BASELINE_SVM_PARAMS = {
+    "C": 1.0, "kernel": "rbf", "feature_type": "scattering_centers" 
 }
-
-# --- 实验运行控制 ---
-RUN_SIMULATED_DATA = True
-RUN_MEASURED_DATA = True
-RUN_BASELINE_EXPERIMENT = True # 是否运行基于原始HRRP的基线分类器
-
-# 消融实验可以通过多次修改这里的配置并运行main.py来实现
-# 例如, 改变 PREPROCESSING['normalize'] 或 PREPROCESSING['use_space_separator']
-# 或 CLASSIFIER_PARAMS['type'] 或 LLM_PARAMS['model_name']
