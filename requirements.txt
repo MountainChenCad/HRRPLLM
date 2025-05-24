@@ -1,0 +1,6 @@
+numpy
+scipy
+scikit-learn
+matplotlib
+openai  # 或者您选择的其他LLM库，如 'sentence-transformers' (如果用本地模型)
+tqdm
