@@ -8,17 +8,11 @@ AVAILABLE_DATASETS = {
         "original_len": 1000,
         "max_samples_to_load": 300 # 保持较小以测试
     },
-    # "measured": { # 如果有实测数据，取消注释并配置
-    #     "path": "datasets/measured_hrrp",
-    #     "data_var": "data",
-    #     "original_len": 500,
-    #     "max_samples_to_load": 100
-    # }
 }
 TARGET_HRRP_LENGTH = 1000 
-PREPROCESS_MAT_TO_NPY = True # 首次运行或更改max_samples_to_load时设为True
+PREPROCESS_MAT_TO_NPY = True 
 PROCESSED_DATA_DIR = "data_processed"
-TEST_SPLIT_SIZE = 0.3 # 元训练集 vs 元测试集
+TEST_SPLIT_SIZE = 0.3 
 RANDOM_STATE = 42
 
 # --- 散射中心提取配置 ---
@@ -26,10 +20,10 @@ SCATTERING_CENTER_EXTRACTION = {
     "enabled": True, 
     "method": "peak_detection", 
     "peak_prominence": 0.15,     
-    "peak_min_distance": 5,     
+    "min_distance": 5,           
     "max_centers_to_keep": 10,  
     "normalize_hrrp_before_extraction": True, 
-    "normalization_type_for_hrrp": "max"
+    "normalization_type_for_hrrp": "max" 
 }
 
 # --- 散射中心文本编码配置 ---
@@ -39,27 +33,25 @@ SCATTERING_CENTER_ENCODING = {
     "precision_amp": 3,        
     "center_separator": "; ",  
     "pos_amp_separator": ":",  
+    "TARGET_HRRP_LENGTH_INFO": TARGET_HRRP_LENGTH 
 }
 
 # --- FSL Episode/Task 和 Prompt 示例选择配置 ---
 FSL_TASK_SETUP = {
-    "enabled": True,  # <--- 确保这个键存在
-    # N-Way: 将使用数据集中所有唯一类别作为 "N"
-    "k_shots_for_prompt_from_task_support": 0, # 为每个类别从元训练集中随机选择K个样本作为Prompt示例
-                                       # 如果设为0, 则执行Zero-Shot (仅上下文和查询)
-    "similarity_metric": "euclidean_on_sc",    # "dtw_on_hrrp", "euclidean_on_hrrp", "euclidean_on_sc"
-    "sc_feature_type_for_similarity": "pos_amp_flat" # 如果metric是 'euclidean_on_sc'
+    "enabled": True,
+    "n_way": 5,                 # N: 每个任务中类别的数量
+    "k_shot_support": 1,        # K: 每个类别在支撑集中的样本数量
+    "q_shot_query": 1,          # Q (n_q): 每个类别在查询集中的样本数量 (按用户要求设为1)
+    "num_fsl_tasks": 20,        # 要生成和评估的FSL任务数量
 }
 
 # --- LLM API 与 Prompt 配置 ---
-# DEEPSEEK API 配置
-OPENAI_API_KEY = os.getenv("DEEPSEEK_API_KEY", "sk-59f809e831cf4859935d949b41985ae8") # 使用您的DeepSeek Key
-OPENAI_PROXY_BASE_URL = "https://api.deepseek.com" # DeepSeek API Base URL
+OPENAI_API_KEY = os.getenv("DEEPSEEK_API_KEY", "sk-59f809e831cf4859935d949b41985ae8") 
+OPENAI_PROXY_BASE_URL = "https://api.deepseek.com" 
 
 LLM_CALLER_PARAMS = {
-    # "model_name": "gpt-4o-mini", # 旧的OpenAI模型
-    "model_name": "deepseek-chat", # 或者 deepseek-coder, 根据DeepSeek文档选择合适的模型
-    "temperature": 1.0, # DeepSeek的temperature可能需要调整，1.0对于分类来说太高了
+    "model_name": "deepseek-chat", 
+    "temperature": 0.1, 
     "top_p": 1.0,
     "max_tokens_completion": 200, 
     "frequency_penalty": 0.0,
@@ -67,13 +59,16 @@ LLM_CALLER_PARAMS = {
     "api_retry_delay": 5,       
     "max_retries": 3            
 }
-LIMIT_TEST_SAMPLES = 20 # 大幅减少测试样本以便快速调试DeepSeek API调用
+# LIMIT_TEST_SAMPLES: 这个参数现在用于在加载数据后，初步限制元测试集的大小。
+# FSL任务将从这个（可能被限制的）元测试集中采样。
+LIMIT_TEST_SAMPLES = 100 
 
 # --- 实验结果保存 ---
 RESULTS_BASE_DIR = "results"
 
 # --- 基线模型配置 ---
-RUN_BASELINE_SVM = True # 是否运行基线
+RUN_BASELINE_SVM = True 
 BASELINE_SVM_PARAMS = {
-    "C": 1.0, "kernel": "rbf", "feature_type": "scattering_centers" 
+    "C": 1.0, "kernel": "rbf", "feature_type": "scattering_centers",
+    "sc_feature_type_for_svm": "pos_amp_flat" 
 }

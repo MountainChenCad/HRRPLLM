@@ -3,194 +3,319 @@ import numpy as np
 import json
 from datetime import datetime
 import random
+import re
 from sklearn.metrics import accuracy_score, f1_score, classification_report, confusion_matrix
 import matplotlib.pyplot as plt
 import seaborn as sns
-import re
 from tqdm import tqdm
 
 from config import (
     AVAILABLE_DATASETS, TARGET_HRRP_LENGTH, PROCESSED_DATA_DIR, TEST_SPLIT_SIZE, RANDOM_STATE,
     SCATTERING_CENTER_EXTRACTION, SCATTERING_CENTER_ENCODING, 
-    FSL_TASK_SETUP, # 使用新的FSL配置
+    FSL_TASK_SETUP,
     OPENAI_API_KEY, OPENAI_PROXY_BASE_URL, LLM_CALLER_PARAMS, LIMIT_TEST_SAMPLES,
     RESULTS_BASE_DIR, RUN_BASELINE_SVM, BASELINE_SVM_PARAMS, PREPROCESS_MAT_TO_NPY,
 )
-from data_utils import prepare_npy_data_and_scattering_centers, load_processed_data
-# build_task_support_set 不再需要
+from data_utils import prepare_npy_data_and_scattering_centers, load_processed_data, build_fsl_tasks
 from scattering_center_encoder import encode_all_sc_sets_to_text
-from dynamic_neighbor_selector import select_k_most_similar_from_support_pool # 新的函数
 from gpt_caller import GPTCaller
 from prompt_constructor_sc import PromptConstructorSC
 from baseline_evaluator import run_svm_baseline_for_dataset
-# feature_extractor 和 sc_set_to_feature_vector 主要在 dynamic_neighbor_selector 内部使用
 
 def parse_llm_output_for_label(llm_response_text, class_names):
-    # (与之前版本相同)
     if not llm_response_text: return None
     match = re.search(r"预测目标类别：\s*([^\n`]+)`?", llm_response_text, re.IGNORECASE) 
     if match:
         extracted_name = match.group(1).strip()
         for cn in class_names:
             if cn.lower() == extracted_name.lower(): return cn
-        return None 
+    
     processed_response = llm_response_text.lower()
-    chars_to_remove = ['.',',',':','"','\'','：','`']; [processed_response := processed_response.replace(c,"") for c in chars_to_remove]
+    chars_to_remove = ['.',',',':','"','\'','：','`','[',']','『','』','【','】','(',')','（','）'];
+    for char_to_remove in chars_to_remove:
+      processed_response = processed_response.replace(char_to_remove, "")
+    
     sorted_class_names = sorted(class_names, key=len, reverse=True)
+    
     for cn in sorted_class_names:
-        processed_cn = cn.lower(); [processed_cn := processed_cn.replace(c,"") for c in chars_to_remove]
-        if processed_cn == "": continue 
-        if processed_cn in processed_response: return cn 
+        processed_cn = cn.lower()
+        for char_to_remove in chars_to_remove: 
+            processed_cn = processed_cn.replace(char_to_remove, "")
+        if not processed_cn: continue 
+        
+        if processed_cn in processed_response.split(): 
+            return cn
+        if processed_cn in processed_response: 
+            return cn
+            
     return None
 
-def run_fsl_experiment_main(dataset_name_key, config): # 重命名主实验函数
-    print(f"\n{'='*30}\n处理数据集: {dataset_name_key} (FSL动态选择SC)\n{'='*30}")
+
+def run_fsl_experiment_main(dataset_name_key, config):
+    print(f"\n{'='*30}\n处理数据集: {dataset_name_key} (FSL N-way K-shot Q-query)\n{'='*30}")
 
     load_result = load_processed_data(dataset_name_key, config, load_scattering_centers=True)
-    if load_result[0] is None: print(f"无法加载 {dataset_name_key} 数据。"); return
+    if load_result[0] is None: 
+        print(f"数据集 '{dataset_name_key}' 加载失败或不完整。跳过FSL实验。"); return
     
-    X_meta_train_hrrp, y_meta_train_original, X_meta_test_hrrp, y_meta_test_original, \
-    X_meta_train_sc_list, X_meta_test_sc_list, label_encoder, class_names = load_result
+    _, _, X_meta_test_hrrp, y_meta_test_original, \
+    _, X_meta_test_sc_list, label_encoder, class_names_all_dataset = load_result
 
-    if not config.SCATTERING_CENTER_EXTRACTION["enabled"] or \
-       X_meta_train_sc_list is None or X_meta_test_sc_list is None or \
-       not X_meta_train_sc_list or not X_meta_test_sc_list:
-        print(f"SC数据 for '{dataset_name_key}' 未启用或为空，跳过FSL(SC)实验。"); return
 
-    # --- 支撑集池（元训练集）的SC文本编码 ---
-    # 这些文本将用于构建Prompt中的Few-Shot示例
-    support_pool_sc_texts_for_prompt = encode_all_sc_sets_to_text(
-        X_meta_train_sc_list, config.SCATTERING_CENTER_ENCODING
-    )
+    if not config.SCATTERING_CENTER_EXTRACTION["enabled"]:
+        print(f"SC提取未启用 for '{dataset_name_key}'，跳过FSL(SC)实验。"); return
     
-    # --- (可选) 限制元测试集(查询集)的样本数量 ---
-    current_X_query_hrrp = X_meta_test_hrrp
-    current_X_query_sc_list = X_meta_test_sc_list
-    current_y_query_original = y_meta_test_original
+    if X_meta_test_hrrp is None or X_meta_test_hrrp.size == 0:
+        print(f"元测试数据为空 for '{dataset_name_key}'，无法构建FSL评估任务。跳过。"); return
+    if config.SCATTERING_CENTER_EXTRACTION["enabled"] and \
+       (X_meta_test_sc_list is None or (isinstance(X_meta_test_sc_list, list) and not X_meta_test_sc_list and X_meta_test_hrrp.size > 0) ):
+        print(f"SC数据 for 元测试集 of '{dataset_name_key}' 未完整加载或为空。跳过FSL(SC)实验。"); return
+
+    data_pool_hrrp = X_meta_test_hrrp
+    data_pool_original_labels = y_meta_test_original
+    data_pool_sc_list = X_meta_test_sc_list
     
-    if config.LIMIT_TEST_SAMPLES is not None and config.LIMIT_TEST_SAMPLES < len(X_meta_test_hrrp):
+    if config.LIMIT_TEST_SAMPLES is not None and config.LIMIT_TEST_SAMPLES > 0 and \
+       config.LIMIT_TEST_SAMPLES < len(X_meta_test_hrrp):
         num_available = len(X_meta_test_hrrp)
         num_to_sample = min(config.LIMIT_TEST_SAMPLES, num_available)
-        print(f"限制查询样本为: {num_to_sample} (从 {num_available} 个)")
-        indices = np.random.choice(num_available, num_to_sample, replace=False)
-        current_X_query_hrrp = X_meta_test_hrrp[indices]
-        current_X_query_sc_list = [X_meta_test_sc_list[i] for i in indices] if X_meta_test_sc_list else []
-        current_y_query_original = y_meta_test_original[indices]
+        print(f"元测试数据池将从 {num_available} 个样本中抽样限制为: {num_to_sample} 个。FSL任务将从此池构建。")
+        
+        np.random.seed(config.RANDOM_STATE) 
+        indices = np.arange(num_available)
+        sampled_indices = np.random.choice(indices, num_to_sample, replace=False)
+            
+        data_pool_hrrp = X_meta_test_hrrp[sampled_indices]
+        data_pool_original_labels = y_meta_test_original[sampled_indices]
+        if X_meta_test_sc_list: 
+             data_pool_sc_list = [X_meta_test_sc_list[i] for i in sampled_indices]
+        else: 
+             data_pool_sc_list = None 
+        print(f"  限制后的数据池大小: {len(data_pool_hrrp)}")
 
-    current_query_sc_texts_for_prompt = encode_all_sc_sets_to_text(
-        current_X_query_sc_list, config.SCATTERING_CENTER_ENCODING
+    elif config.LIMIT_TEST_SAMPLES is not None and config.LIMIT_TEST_SAMPLES <=0:
+        print(f"LIMIT_TEST_SAMPLES ({config.LIMIT_TEST_SAMPLES}) <= 0, 数据池将为空。FSL任务无法构建。")
+        data_pool_hrrp = np.array([])
+        data_pool_original_labels = np.array([])
+        data_pool_sc_list = []
+
+    fsl_tasks = build_fsl_tasks(
+        data_pool_hrrp, data_pool_original_labels, data_pool_sc_list, 
+        label_encoder, config.FSL_TASK_SETUP, config.SCATTERING_CENTER_ENCODING, config.RANDOM_STATE
     )
+    if not fsl_tasks:
+        print(f"数据集 '{dataset_name_key}' 未能构建FSL任务。跳过实验。"); return
 
     gpt_caller = GPTCaller(**config.LLM_CALLER_PARAMS, api_key=config.OPENAI_API_KEY, base_url=config.OPENAI_PROXY_BASE_URL)
-    prompt_constructor = PromptConstructorSC(dataset_name_key, class_names, config.SCATTERING_CENTER_ENCODING)
-
-    y_pred_llm_original_labels = []
     
-    k_prompt_str = f"k{config.FSL_TASK_SETUP['k_shots_for_prompt_from_task_support']}Prompt"
-    # s_support_str = f"s{config.FSL_TASK_SETUP['samples_per_class_in_task_support_set']}TaskSupport" # 这个配置项已移除
-    sim_metric_str = config.FSL_TASK_SETUP["similarity_metric"].replace("_on_", "On")
-    sc_format_str = config.SCATTERING_CENTER_ENCODING["format"]
-    llm_model_str = config.LLM_CALLER_PARAMS["model_name"].replace("/", "_").replace(".","_")
-    experiment_run_name = f"FSL_SC_dynamicSupport_{sim_metric_str}_{k_prompt_str}_{sc_format_str}_{llm_model_str}"
+    all_query_true_labels_original = []
+    all_query_pred_llm_original_labels = []
+    
+    fsl_cfg = config.FSL_TASK_SETUP
+    exp_name_parts = [
+        "FSL_SC_eval", 
+        f"{fsl_cfg['n_way']}way",
+        f"{fsl_cfg['k_shot_support']}Ksup",
+        f"{fsl_cfg['q_shot_query']}Qquery",
+        f"{len(fsl_tasks)}tasks", 
+        config.SCATTERING_CENTER_ENCODING["format"],
+        config.LLM_CALLER_PARAMS["model_name"].replace("/", "_").replace(".", "_")
+    ]
+    experiment_run_name = "_".join(exp_name_parts)
     current_result_dir = os.path.join(config.RESULTS_BASE_DIR, dataset_name_key, experiment_run_name)
     os.makedirs(current_result_dir, exist_ok=True)
-
-    print(f"\n开始对 {len(current_X_query_hrrp)} 个查询样本进行LLM预测 (run: {experiment_run_name})...")
     
-    for i in tqdm(range(len(current_X_query_hrrp)), desc=f"LLM预测 ({dataset_name_key}_FSL_SC)", leave=False):
-        query_hrrp_sample = current_X_query_hrrp[i]
-        query_sc_list_sample = current_X_query_sc_list[i] if current_X_query_sc_list else None
-        query_sc_text_for_prompt = current_query_sc_texts_for_prompt[i]
-        
-        few_shot_examples_for_this_query = []
-        if config.FSL_TASK_SETUP["enabled"] and config.FSL_TASK_SETUP["k_shots_for_prompt_from_task_support"] > 0:
-            few_shot_examples_for_this_query = select_k_most_similar_from_support_pool(
-                query_hrrp_if_needed=query_hrrp_sample,
-                query_sc_list_if_needed=query_sc_list_sample,
-                support_pool_hrrps=X_meta_train_hrrp,         # 整个元训练HRRP池
-                support_pool_sc_lists=X_meta_train_sc_list,  # 整个元训练SC池
-                support_pool_labels_original=y_meta_train_original, # 元训练标签
-                support_pool_sc_texts_for_prompt=support_pool_sc_texts_for_prompt, # 元训练SC文本
-                total_k_shots_for_prompt=config.FSL_TASK_SETUP["k_shots_for_prompt_from_task_support"],
-                similarity_metric=config.FSL_TASK_SETUP["similarity_metric"],
-                sc_extraction_config=config.SCATTERING_CENTER_EXTRACTION,
-                sc_feature_type_for_similarity=config.FSL_TASK_SETUP.get("sc_feature_type_for_similarity")
-            )
-        
-        prompt_str = prompt_constructor.construct_prompt_with_sc(query_sc_text_for_prompt, few_shot_examples_for_this_query)
-        
-        file_idx_prefix = i 
-        prompt_filename = f"prompt_queryIdx{file_idx_prefix}.txt"; response_filename = f"response_queryIdx{file_idx_prefix}.txt"
-        with open(os.path.join(current_result_dir, prompt_filename), "w", encoding="utf-8") as pf: pf.write(prompt_str)
-        llm_response = gpt_caller.get_completion(prompt_str)
-        if llm_response:
-            with open(os.path.join(current_result_dir, response_filename), "w", encoding="utf-8") as rf: rf.write(llm_response)
-            predicted_label = parse_llm_output_for_label(llm_response, class_names)
-            y_pred_llm_original_labels.append(predicted_label)
-        else: y_pred_llm_original_labels.append(None)
+    # MODIFIED: Create a sub-directory for prompts and responses if desired, or save directly to current_result_dir
+    prompts_responses_dir = os.path.join(current_result_dir, "prompts_and_responses")
+    os.makedirs(prompts_responses_dir, exist_ok=True)
+    print(f"Prompts和Responses将保存到: {prompts_responses_dir}")
 
-    # --- 评估 ---
-    # (评估逻辑与之前版本相同，确保使用 current_y_query_original 和 y_pred_llm_original_labels)
+    print(f"\n开始对 {len(fsl_tasks)} 个FSL任务进行LLM预测 (run: {experiment_run_name})...")
+    
+    total_queries_processed_in_experiment = 0
+    for task_idx, task_data in enumerate(tqdm(fsl_tasks, desc=f"FSL任务处理 ({dataset_name_key})", leave=False, unit="task")):
+        task_specific_class_names = list(task_data["task_classes"]) 
+        prompt_constructor = PromptConstructorSC(dataset_name_key, task_specific_class_names, config.SCATTERING_CENTER_ENCODING)
+
+        support_sc_texts_for_prompt = task_data["support_sc_texts"]
+        support_labels_for_prompt = task_data["support_labels"]
+        
+        few_shot_examples_for_prompt = []
+        if fsl_cfg["k_shot_support"] > 0: 
+            if len(support_sc_texts_for_prompt) == len(support_labels_for_prompt) and len(support_sc_texts_for_prompt) > 0 :
+                for sc_text, label in zip(support_sc_texts_for_prompt, support_labels_for_prompt):
+                    few_shot_examples_for_prompt.append((sc_text, label))
+            elif len(support_sc_texts_for_prompt) == 0 :
+                 print(f"  警告: 任务 {task_idx+1} 配置为K>0 shot，但支撑集SC文本为空。将执行0-shot。")
+            elif len(support_sc_texts_for_prompt) != len(support_labels_for_prompt) :
+                 print(f"  警告: 任务 {task_idx+1} 支撑集SC文本和标签数量不匹配。将执行0-shot。")
+
+        task_query_sc_texts = task_data["query_sc_texts"]
+        task_query_labels = task_data["query_labels"] 
+
+        if not task_query_sc_texts or len(task_query_sc_texts) == 0:
+            continue
+
+        task_query_pred_labels = []
+        for query_idx_in_task, query_sc_text_for_prompt in enumerate(task_query_sc_texts):
+            prompt_str = prompt_constructor.construct_prompt_with_sc(query_sc_text_for_prompt, few_shot_examples_for_prompt)
+            
+            # MODIFIED: Save prompt to file
+            prompt_filename = f"prompt_task{task_idx}_query{query_idx_in_task}.txt"
+            prompt_filepath = os.path.join(prompts_responses_dir, prompt_filename)
+            try:
+                with open(prompt_filepath, "w", encoding="utf-8") as pf:
+                    pf.write(f"--- Task {task_idx}, Query {query_idx_in_task} ---\n")
+                    pf.write(f"True Label (for this query): {task_query_labels[query_idx_in_task]}\n") # Save true label for context
+                    pf.write(f"Task Classes: {task_specific_class_names}\n")
+                    pf.write("--- Prompt Sent to LLM: ---\n")
+                    pf.write(prompt_str)
+            except Exception as e:
+                print(f"  错误: 无法保存prompt文件 {prompt_filepath}: {e}")
+
+            llm_response = gpt_caller.get_completion(prompt_str)
+            predicted_label = None
+
+            # MODIFIED: Save response to file
+            response_filename = f"response_task{task_idx}_query{query_idx_in_task}.txt"
+            response_filepath = os.path.join(prompts_responses_dir, response_filename)
+            if llm_response:
+                try:
+                    with open(response_filepath, "w", encoding="utf-8") as rf:
+                        rf.write(llm_response)
+                except Exception as e:
+                    print(f"  错误: 无法保存response文件 {response_filepath}: {e}")
+                predicted_label = parse_llm_output_for_label(llm_response, task_specific_class_names) 
+            else: # Handle case where LLM response is None
+                try:
+                    with open(response_filepath, "w", encoding="utf-8") as rf:
+                        rf.write("LLM_RESPONSE_IS_NONE")
+                except Exception as e:
+                    print(f"  错误: 无法保存空的response文件 {response_filepath}: {e}")
+
+
+            task_query_pred_labels.append(predicted_label)
+            total_queries_processed_in_experiment +=1
+
+        all_query_true_labels_original.extend(task_query_labels) 
+        all_query_pred_llm_original_labels.extend(task_query_pred_labels)
+
     valid_preds_count = 0; y_true_eval, y_pred_eval = [], []; failed_count = 0
-    for i, (true_l, pred_l) in enumerate(zip(current_y_query_original, y_pred_llm_original_labels)): # 使用 current_y_query_original
-        if pred_l is not None: y_true_eval.append(true_l); y_pred_eval.append(pred_l); valid_preds_count+=1
+    for true_l, pred_l in zip(all_query_true_labels_original, all_query_pred_llm_original_labels):
+        if pred_l is not None: 
+            y_true_eval.append(true_l); y_pred_eval.append(pred_l); valid_preds_count+=1
         else: failed_count+=1
-    print(f"\nLLM预测(FSL_SC)完成。有效预测: {valid_preds_count}/{len(current_y_query_original)}。失败/无法解析: {failed_count}。")
-
-    acc, f1, report = 0.0, 0.0, {}
-    if valid_preds_count > 0:
-        y_true_e, y_pred_e = label_encoder.transform(y_true_eval), label_encoder.transform(y_pred_eval)
-        acc = accuracy_score(y_true_e,y_pred_e); f1 = f1_score(y_true_e,y_pred_e,average='macro',zero_division=0)
-        report_labels_e = label_encoder.transform(label_encoder.classes_)
-        try:
-            report_s = classification_report(y_true_e,y_pred_e,labels=report_labels_e,target_names=label_encoder.classes_,zero_division=0)
-            report = classification_report(y_true_e,y_pred_e,labels=report_labels_e,target_names=label_encoder.classes_,output_dict=True,zero_division=0)
-        except Exception as e: report_s=classification_report(y_true_e,y_pred_e,zero_division=0); report=classification_report(y_true_e,y_pred_e,output_dict=True,zero_division=0); print(f"报告出错: {e}")
-        print("\nLLM FSL (SC) 分类报告:\n", report_s); print(f"准确率: {acc:.4f}, F1: {f1_macro:.4f}")
-        if valid_preds_count > 1 :
-            cm=confusion_matrix(y_true_e,y_pred_e,labels=label_encoder.transform(label_encoder.classes_))
-            plt.figure(figsize=(max(8,len(class_names)),max(6,int(len(class_names)*0.8)))); sns.heatmap(cm,annot=True,fmt="d",cmap="Blues",xticklabels=label_encoder.classes_,yticklabels=label_encoder.classes_)
-            plt.title(f"混淆矩阵 - {experiment_run_name}",fontsize=10); plt.xlabel("预测"); plt.ylabel("真实"); plt.xticks(rotation=45,ha="right"); plt.yticks(rotation=0); plt.tight_layout()
-            plt.savefig(os.path.join(current_result_dir, "confusion_matrix.png")); plt.close()
-    else: print("无有效LLM预测。")
     
-    summary = {"dataset":dataset_name_key, "exp_type":"fsl_sc_dynamic_support_selection", "exp_name":experiment_run_name, "config":{"FSL_SETUP":config.FSL_TASK_SETUP, "SC_EXT":config.SCATTERING_CENTER_EXTRACTION, "SC_ENC":config.SCATTERING_CENTER_ENCODING, "LLM":config.LLM_CALLER_PARAMS}, "valid_preds":valid_preds_count, "total_query":len(current_y_query_original), "accuracy":acc, "f1_macro":f1, "report":report}
-    with open(os.path.join(current_result_dir, "summary.json"), "w", encoding="utf-8") as f: json.dump(summary,f,indent=4,ensure_ascii=False)
-    print(f"FSL实验总结保存到: {os.path.join(current_result_dir, 'summary.json')}")
+    expected_total_queries = sum(len(t['query_labels']) for t in fsl_tasks)
+    print(f"\nLLM预测(FSL_SC)完成。总查询样本应处理: {expected_total_queries} (来自 {len(fsl_tasks)} 个任务)。实际处理: {total_queries_processed_in_experiment}。")
+    print(f"有效预测: {valid_preds_count}/{len(all_query_true_labels_original)}。失败/无法解析: {failed_count}。")
 
+
+    acc_val, f1_macro_val, report_dict = 0.0, 0.0, {}
+    if valid_preds_count > 0:
+        y_true_encoded = label_encoder.transform(y_true_eval) 
+        y_pred_encoded = label_encoder.transform(y_pred_eval)
+        
+        acc_val = accuracy_score(y_true_encoded, y_pred_encoded)
+        f1_macro_val = f1_score(y_true_encoded, y_pred_encoded, average='macro', zero_division=0)
+        
+        report_labels_encoded = label_encoder.transform(class_names_all_dataset)
+        
+        try:
+            report_str = classification_report(y_true_encoded, y_pred_encoded, labels=report_labels_encoded, target_names=class_names_all_dataset, zero_division=0, digits=3)
+            report_dict = classification_report(y_true_encoded, y_pred_encoded, labels=report_labels_encoded, target_names=class_names_all_dataset, output_dict=True, zero_division=0, digits=3)
+        except Exception as e: 
+             print(f"生成分类报告时出现异常: {e}. 尝试使用实际出现的标签。")
+             present_labels_encoded = np.unique(np.concatenate((y_true_encoded, y_pred_encoded)))
+             present_class_names = list(label_encoder.inverse_transform(present_labels_encoded))
+             report_str = classification_report(y_true_encoded, y_pred_encoded, labels=present_labels_encoded, target_names=present_class_names, zero_division=0, digits=3)
+             report_dict = classification_report(y_true_encoded, y_pred_encoded, labels=present_labels_encoded, target_names=present_class_names, output_dict=True, zero_division=0, digits=3)
+
+        print("\nLLM FSL (SC) 分类报告 (汇总所有任务查询集):\n", report_str)
+        print(f"准确率 (Accuracy): {acc_val:.4f}, F1宏平均 (F1-macro): {f1_macro_val:.4f}")
+        
+        if valid_preds_count > 1 :
+            cm_labels_encoded = label_encoder.transform(class_names_all_dataset)
+            cm_class_names_display = class_names_all_dataset
+            
+            cm = confusion_matrix(y_true_encoded, y_pred_encoded, labels=cm_labels_encoded)
+            
+            plt.figure(figsize=(max(8,len(cm_class_names_display)*0.6), max(6,len(cm_class_names_display)*0.45)))
+            sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=cm_class_names_display, yticklabels=cm_class_names_display, annot_kws={"size": 8})
+            plt.title(f"混淆矩阵 - {experiment_run_name}", fontsize=10)
+            plt.xlabel("预测类别", fontsize=9); plt.ylabel("真实类别", fontsize=9)
+            plt.xticks(rotation=45, ha="right", fontsize=8); plt.yticks(rotation=0, fontsize=8); plt.tight_layout()
+            plt.savefig(os.path.join(current_result_dir, "confusion_matrix_aggregated.png")); plt.close()
+            print(f"混淆矩阵已保存到: {os.path.join(current_result_dir, 'confusion_matrix_aggregated.png')}")
+    else: print("无有效LLM预测可供评估。")
+    
+    summary = {
+        "dataset": dataset_name_key, 
+        "exp_type": "fsl_sc_nway_kshot_qquery_eval", 
+        "exp_name": experiment_run_name, 
+        "config":{
+            "FSL_SETUP": config.FSL_TASK_SETUP, 
+            "SC_EXT": config.SCATTERING_CENTER_EXTRACTION, 
+            "SC_ENC": config.SCATTERING_CENTER_ENCODING, 
+            "LLM": config.LLM_CALLER_PARAMS,
+            "LIMIT_META_TEST_POOL_SIZE": config.LIMIT_TEST_SAMPLES if config.LIMIT_TEST_SAMPLES is not None else "None"
+        }, 
+        "results_summary": {
+            "total_fsl_tasks_generated": len(fsl_tasks),
+            "total_queries_expected_in_tasks": expected_total_queries,
+            "total_queries_actually_processed_by_llm": total_queries_processed_in_experiment,
+            "valid_predictions_from_llm": valid_preds_count, 
+            "total_query_instances_evaluated": len(all_query_true_labels_original),
+            "accuracy": acc_val, 
+            "f1_macro": f1_macro_val
+        },
+        "full_classification_report": report_dict 
+    }
+    summary_path = os.path.join(current_result_dir, "summary_fsl_aggregated.json")
+    with open(summary_path, "w", encoding="utf-8") as f: json.dump(summary, f, indent=4, ensure_ascii=False)
+    print(f"FSL实验总结保存到: {summary_path}")
+
+
+class CurrentRunConfig:
+    AVAILABLE_DATASETS=AVAILABLE_DATASETS; TARGET_HRRP_LENGTH=TARGET_HRRP_LENGTH; PREPROCESS_MAT_TO_NPY=PREPROCESS_MAT_TO_NPY
+    PROCESSED_DATA_DIR=PROCESSED_DATA_DIR; TEST_SPLIT_SIZE=TEST_SPLIT_SIZE; RANDOM_STATE=RANDOM_STATE
+    SCATTERING_CENTER_EXTRACTION=SCATTERING_CENTER_EXTRACTION; SCATTERING_CENTER_ENCODING=SCATTERING_CENTER_ENCODING
+    FSL_TASK_SETUP=FSL_TASK_SETUP 
+    OPENAI_API_KEY=OPENAI_API_KEY; OPENAI_PROXY_BASE_URL=OPENAI_PROXY_BASE_URL; LLM_CALLER_PARAMS=LLM_CALLER_PARAMS
+    LIMIT_TEST_SAMPLES=LIMIT_TEST_SAMPLES; RESULTS_BASE_DIR=RESULTS_BASE_DIR
+    RUN_BASELINE_SVM=RUN_BASELINE_SVM; BASELINE_SVM_PARAMS=BASELINE_SVM_PARAMS
 
 def main():
-    class CurrentRunConfig: 
-        AVAILABLE_DATASETS=AVAILABLE_DATASETS; TARGET_HRRP_LENGTH=TARGET_HRRP_LENGTH; PREPROCESS_MAT_TO_NPY=PREPROCESS_MAT_TO_NPY
-        PROCESSED_DATA_DIR=PROCESSED_DATA_DIR; TEST_SPLIT_SIZE=TEST_SPLIT_SIZE; RANDOM_STATE=RANDOM_STATE
-        SCATTERING_CENTER_EXTRACTION=SCATTERING_CENTER_EXTRACTION; SCATTERING_CENTER_ENCODING=SCATTERING_CENTER_ENCODING
-        FSL_TASK_SETUP=FSL_TASK_SETUP 
-        OPENAI_API_KEY=OPENAI_API_KEY; OPENAI_PROXY_BASE_URL=OPENAI_PROXY_BASE_URL; LLM_CALLER_PARAMS=LLM_CALLER_PARAMS
-        LIMIT_TEST_SAMPLES=LIMIT_TEST_SAMPLES; RESULTS_BASE_DIR=RESULTS_BASE_DIR
-        RUN_BASELINE_SVM=RUN_BASELINE_SVM; BASELINE_SVM_PARAMS=BASELINE_SVM_PARAMS
     config_obj = CurrentRunConfig()
-    print("开始HRRP目标识别实验 (FSL任务，动态选择，基于散射中心)..."); start_time_total = datetime.now()
+    print("开始HRRP目标识别实验 (FSL N-way K-shot Q-query, 基于散射中心)..."); start_time_total = datetime.now()
     
     if config_obj.PREPROCESS_MAT_TO_NPY or \
        (config_obj.SCATTERING_CENTER_EXTRACTION["enabled"] and \
-        not all(os.path.exists(os.path.join(config_obj.PROCESSED_DATA_DIR, dk, "X_train_scatter_centers.pkl")) 
-                for dk in config_obj.AVAILABLE_DATASETS.keys())):
+        not all(os.path.exists(os.path.join(config_obj.PROCESSED_DATA_DIR, dk, "X_train_scatter_centers.pkl")) and \
+                os.path.exists(os.path.join(config_obj.PROCESSED_DATA_DIR, dk, "X_test_scatter_centers.pkl"))
+                for dk in config_obj.AVAILABLE_DATASETS.keys() if config_obj.AVAILABLE_DATASETS[dk])): 
         print("\n--- 步骤0: 准备 .npy HRRP数据 和 散射中心 .pkl 文件 ---")
         prepare_npy_data_and_scattering_centers(config_obj)
+    else:
+        print("\n--- 步骤0: 跳过数据预处理和SC提取 (PREPROCESS_MAT_TO_NPY=False 且所需文件已存在) ---")
     
     for dset_key in config_obj.AVAILABLE_DATASETS.keys():
+        if not config_obj.AVAILABLE_DATASETS[dset_key]: continue 
         print(f"\n>>>>>> 开始处理数据集: {dset_key} (FSL基于SC) <<<<<<")
         if config_obj.SCATTERING_CENTER_EXTRACTION["enabled"] and config_obj.FSL_TASK_SETUP["enabled"]: 
-            run_fsl_experiment_main(dset_key, config_obj) # 调用新的主实验函数
+            run_fsl_experiment_main(dset_key, config_obj)
         elif not config_obj.SCATTERING_CENTER_EXTRACTION["enabled"]:
             print(f"跳过FSL(SC)实验 for '{dset_key}'，因为散射中心提取已禁用。")
         elif not config_obj.FSL_TASK_SETUP["enabled"]: 
             print(f"跳过FSL(SC)实验 for '{dset_key}'，因为FSL任务设置已禁用。")
         
         if config_obj.RUN_BASELINE_SVM:
-            try: run_svm_baseline_for_dataset(dset_key, config_obj)
+            try: 
+                print(f"\n--- 为数据集 '{dset_key}' 运行基线SVM ---")
+                run_svm_baseline_for_dataset(dset_key, config_obj)
             except Exception as e: print(f"运行基线SVM时出错 ({dset_key}): {e}")
         print(f">>>>>> 数据集: {dset_key} 处理完毕 <<<<<<")
+        
     print(f"\n所有实验流程完成。总耗时: {datetime.now() - start_time_total}")
     print(f"所有结果保存在 '{config_obj.RESULTS_BASE_DIR}' 目录下。")
 
