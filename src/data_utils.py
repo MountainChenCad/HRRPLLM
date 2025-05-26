@@ -7,16 +7,35 @@ from sklearn.preprocessing import LabelEncoder
 from tqdm import tqdm
 import pickle
 import random
+from scipy.spatial.distance import euclidean # MODIFIED: Added for prototype calculation
 
 from feature_extractor import extract_scattering_centers_peak_detection 
-from scattering_center_encoder import encode_all_sc_sets_to_text 
+from scattering_center_encoder import encode_single_sc_set_to_text, encode_all_sc_sets_to_text 
+# MODIFIED: Attempt to import sc_set_to_feature_vector from dynamic_neighbor_selector
+# If this causes issues, it should be moved to a more common utility file.
+try:
+    from dynamic_neighbor_selector import sc_set_to_feature_vector
+except ImportError:
+    print("警告 (data_utils): 无法从 dynamic_neighbor_selector 导入 sc_set_to_feature_vector。原型计算将受影响。")
+    # Define a dummy function if not available, so the rest of the code doesn't break immediately
+    # This will likely lead to errors if prototype calculation is attempted.
+    def sc_set_to_feature_vector(sc_set, max_centers, feature_type):
+        print(f"错误: sc_set_to_feature_vector 未加载, 无法为原型创建特征向量。")
+        # Return a zero vector of expected size if possible, or raise error
+        if feature_type == "pos_amp_flat":
+            return np.zeros(max_centers * 2)
+        else: # amps_only_padded, pos_only_padded
+            return np.zeros(max_centers)
+
 
 try:
     import config as config_module_for_data_utils
 except ImportError:
-    class FallbackConfigDU: RANDOM_STATE = 42 
+    class FallbackConfigDU: 
+        RANDOM_STATE = 42
+        SCATTERING_CENTER_EXTRACTION = {"max_centers_to_keep": 10} # Provide a fallback for max_centers
     config_module_for_data_utils = FallbackConfigDU()
-    print("警告(data_utils): 未能导入主config，使用默认RANDOM_STATE。")
+    print("警告(data_utils): 未能导入主config，使用默认RANDOM_STATE和部分SC配置。")
 
 
 def get_target_label_from_filename(filename, prefix_len=None):
@@ -94,8 +113,9 @@ def prepare_npy_data_and_scattering_centers(config):
         
         if regenerate_sc:
             if not regenerate_hrrp: 
-                X_tr_h = np.load(paths["X_train"], allow_pickle=True)
-                X_te_h = np.load(paths["X_test"], allow_pickle=True)
+                X_tr_h = np.load(paths["X_train"], allow_pickle=True) if os.path.exists(paths["X_train"]) else np.array([])
+                X_te_h = np.load(paths["X_test"], allow_pickle=True) if os.path.exists(paths["X_test"]) else np.array([])
+
             sc_cfg = config.SCATTERING_CENTER_EXTRACTION
             print(f"为 '{dataset_key}' 提取或重新提取散射中心 (方法: {sc_cfg['method']})...")
             
@@ -114,8 +134,7 @@ def prepare_npy_data_and_scattering_centers(config):
                 print(f"训练SC .pkl 已更新 (数量: {len(X_tr_sc)})")
             else:
                 print(f"训练数据为空 for '{dataset_key}', 跳过训练SC提取。")
-                with open(paths["X_train_scatter_centers"],'wb') as f: pickle.dump([],f)
-
+                with open(paths["X_train_scatter_centers"],'wb') as f: pickle.dump([],f) # Save empty list
 
             if X_te_h.size > 0:
                 X_te_sc = [extract_scattering_centers_peak_detection(h, **sc_params) for h in tqdm(X_te_h,desc=f"提取测试SC ({dataset_key})",leave=False, unit="samp")]
@@ -123,7 +142,7 @@ def prepare_npy_data_and_scattering_centers(config):
                 print(f"测试SC .pkl 已更新 (数量: {len(X_te_sc)})")
             else:
                 print(f"测试数据为空 for '{dataset_key}', 跳过测试SC提取。")
-                with open(paths["X_test_scatter_centers"],'wb') as f: pickle.dump([],f)
+                with open(paths["X_test_scatter_centers"],'wb') as f: pickle.dump([],f) # Save empty list
                 
         elif config.SCATTERING_CENTER_EXTRACTION["enabled"]: print(f"数据集 '{dataset_key}' 跳过SC提取 (文件已存在)。")
         else: print(f"数据集 '{dataset_key}' 跳过SC提取 (已禁用)。")
@@ -155,38 +174,31 @@ def load_processed_data(dataset_name_key, config, load_scattering_centers=True):
         print(f"错误: {dataset_name_key} 的 .npy/pkl 文件不完整于 {processed_path}"); return (None,)*8
 
     X_tr_h, y_tr_o, X_te_h, y_te_o, le, c_names = load_npy_data_internal(dataset_name_key, config, paths)
-    if X_tr_h is None: return (None,)*8 
+    if X_tr_h is None and X_te_h is None : return (None,)*8 # If both train and test HRRP are None
 
-    X_tr_sc, X_te_sc = None, None
+    X_tr_sc, X_te_sc = [], [] # Default to empty lists
     if load_scattering_centers and config.SCATTERING_CENTER_EXTRACTION["enabled"]:
-        # Handle cases where SC files might be empty lists if HRRP data was empty
         try:
             if os.path.exists(paths["X_train_scatter_centers"]):
                 with open(paths["X_train_scatter_centers"],'rb') as f: X_tr_sc = pickle.load(f)
-            else: X_tr_sc = [] # Default to empty list if file not found
+            if X_tr_h is not None and X_tr_h.size > 0 and not X_tr_sc: # if HRRP train exists but SC is empty list
+                 print(f"警告: {dataset_name_key} 的训练散射中心数据为空或未加载，但HRRP训练数据存在。")
             
             if os.path.exists(paths["X_test_scatter_centers"]):
                 with open(paths["X_test_scatter_centers"],'rb') as f: X_te_sc = pickle.load(f)
-            else: X_te_sc = [] # Default to empty list if file not found
+            if X_te_h is not None and X_te_h.size > 0 and not X_te_sc: # if HRRP test exists but SC is empty list
+                 print(f"警告: {dataset_name_key} 的测试散射中心数据为空或未加载，但HRRP测试数据存在。")
 
         except Exception as e: 
-            print(f"加载SC文件出错 for '{dataset_name_key}': {e}"); X_tr_sc,X_te_sc=[],[] # Fallback to empty lists
-        
-        if not X_tr_sc and X_tr_h.size > 0 : print(f"警告: {dataset_name_key} 的训练散射中心数据为空，但HRRP数据存在。")
-        if not X_te_sc and X_te_h.size > 0 : print(f"警告: {dataset_name_key} 的测试散射中心数据为空，但HRRP数据存在。")
+            print(f"加载SC文件出错 for '{dataset_name_key}': {e}"); X_tr_sc,X_te_sc=[],[]
 
     return X_tr_h, y_tr_o, X_te_h, y_te_o, X_tr_sc, X_te_sc, le, c_names
 
 def build_fsl_tasks(
-    # MODIFIED: Tasks are now built from a single data pool, typically meta-test for evaluation
     X_data_pool_hrrp, y_data_pool_original, X_data_pool_sc_list,
-    label_encoder, fsl_config, sc_encoding_config, random_state
+    label_encoder, fsl_config, sc_encoding_config, sc_extraction_config, # MODIFIED: Added sc_extraction_config
+    random_state
 ):
-    """
-    构建FSL评估任务列表。
-    每个任务从数据池 (通常是元测试集) 中采样 N 个类别，
-    每个类别 K 个支撑样本和 Q 个查询样本。
-    """
     np.random.seed(random_state)
     random.seed(random_state)
 
@@ -194,93 +206,145 @@ def build_fsl_tasks(
     k_shot_support = fsl_config["k_shot_support"]
     q_shot_query = fsl_config["q_shot_query"]
     num_tasks = fsl_config["num_fsl_tasks"]
+    sc_feature_type_for_proto = fsl_config.get("sc_feature_type_for_prototype", "pos_amp_flat")
+    max_centers_for_proto_feat = sc_extraction_config["max_centers_to_keep"]
     
     tasks = []
     
     if X_data_pool_hrrp is None or X_data_pool_hrrp.size == 0:
         print("警告 (build_fsl_tasks): 提供的数据池为空。无法创建任务。")
         return []
-    if X_data_pool_sc_list is not None and len(X_data_pool_hrrp) != len(X_data_pool_sc_list):
-        print("警告 (build_fsl_tasks): HRRP数据池和SC列表长度不匹配。SC数据可能不可靠。")
-        # Proceeding, but SCs might be misaligned or missing for some samples.
-        # Consider making X_data_pool_sc_list mandatory or handling this more gracefully if SCs are critical.
+    
+    # Ensure X_data_pool_sc_list is a list, even if empty, if SCs are enabled
+    if sc_extraction_config["enabled"] and X_data_pool_sc_list is None:
+        print("警告 (build_fsl_tasks): SC提取已启用，但X_data_pool_sc_list为None。将视为空SC列表。")
+        X_data_pool_sc_list = [[] for _ in range(len(X_data_pool_hrrp))] # Create list of empty lists
+    
+    if sc_extraction_config["enabled"] and X_data_pool_sc_list is not None and len(X_data_pool_hrrp) != len(X_data_pool_sc_list):
+        print(f"警告 (build_fsl_tasks): HRRP数据池 ({len(X_data_pool_hrrp)}) 和SC列表 ({len(X_data_pool_sc_list)}) 长度不匹配。SC数据可能不可靠。")
+        # Adjust SC list to match HRRP length, filling with empty SCs if shorter
+        if len(X_data_pool_sc_list) < len(X_data_pool_hrrp):
+            X_data_pool_sc_list.extend([[] for _ in range(len(X_data_pool_hrrp) - len(X_data_pool_sc_list))])
+        else: # SC list is longer, truncate (less ideal)
+            X_data_pool_sc_list = X_data_pool_sc_list[:len(X_data_pool_hrrp)]
+
 
     unique_pool_classes = np.unique(y_data_pool_original)
-    
-    # 按类别组织数据池的索引
     pool_class_indices = {cls: np.where(y_data_pool_original == cls)[0] for cls in unique_pool_classes}
-
-    # 筛选出在数据池中至少有 K + Q 个样本的类别
     valid_classes_for_task_sampling = [
         cls for cls in unique_pool_classes if len(pool_class_indices[cls]) >= (k_shot_support + q_shot_query)
     ]
 
     if len(valid_classes_for_task_sampling) < n_way:
-        print(f"警告 (build_fsl_tasks): 数据池中满足 K+Q ({k_shot_support+q_shot_query}) 样本条件的类别数 ({len(valid_classes_for_task_sampling)}) 少于 N-way ({n_way})。无法创建足够的任务。")
+        print(f"警告 (build_fsl_tasks): 数据池中满足 K+Q ({k_shot_support+q_shot_query}) 样本条件的类别数 ({len(valid_classes_for_task_sampling)}) 少于 N-way ({n_way})。")
         return []
 
     for task_idx in tqdm(range(num_tasks), desc="构建FSL评估任务", leave=False, unit="task"):
-        task_support_hrrp_list, task_support_sc_list_list, task_support_labels_list = [], [], []
+        # Support set for the task (actual samples)
+        task_support_hrrp_actual_samples, task_support_sc_list_actual_samples, task_support_labels_actual_samples = [], [], []
+        # Query set for the task
         task_query_hrrp_list, task_query_sc_list_list, task_query_labels_list = [], [], []
         
-        # 1. 从有效类别中选择 N 个类别
-        if len(valid_classes_for_task_sampling) < n_way : # Should have been caught above, but good for safety
-            # print(f"  任务 {task_idx+1}/{num_tasks}: 可用于构建当前任务的有效类别不足。已尝试所有组合或已达任务上限。")
-            break # Stop trying to make more tasks if not enough classes
-            
+        # For prompt: N prototypes
+        task_prototype_sc_texts_for_prompt = []
+        task_prototype_labels_for_prompt = [] # Should be the N class names
+
+        if len(valid_classes_for_task_sampling) < n_way : break            
         selected_classes_for_task = np.random.choice(valid_classes_for_task_sampling, size=n_way, replace=False)
         
-        current_task_valid = True
+        current_task_fully_valid = True # Flag to check if all parts of task construction succeed
         for cls_name in selected_classes_for_task:
             class_specific_pool_indices = pool_class_indices[cls_name]
             
-            # 从该类别的样本中随机选择 K+Q 个不同的样本索引
-            if len(class_specific_pool_indices) < (k_shot_support + q_shot_query): # Should be caught by valid_classes check
-                current_task_valid = False; break 
+            if len(class_specific_pool_indices) < (k_shot_support + q_shot_query): 
+                current_task_fully_valid = False; break 
             
-            selected_indices_for_class = np.random.choice(
+            selected_indices_for_class_in_pool = np.random.choice(
                 class_specific_pool_indices, 
                 size=(k_shot_support + q_shot_query), 
                 replace=False
             )
             
-            # 划分支撑集和查询集
-            np.random.shuffle(selected_indices_for_class) # 打乱以随机分配
-            support_indices_for_class = selected_indices_for_class[:k_shot_support]
-            query_indices_for_class = selected_indices_for_class[k_shot_support:] # Remaining are query
+            np.random.shuffle(selected_indices_for_class_in_pool) 
+            current_class_support_indices = selected_indices_for_class_in_pool[:k_shot_support]
+            current_class_query_indices = selected_indices_for_class_in_pool[k_shot_support:]
 
-            # 添加到任务列表
-            task_support_hrrp_list.extend(X_data_pool_hrrp[support_indices_for_class])
-            task_support_labels_list.extend(y_data_pool_original[support_indices_for_class])
-            if X_data_pool_sc_list:
-                task_support_sc_list_list.extend([X_data_pool_sc_list[i] for i in support_indices_for_class])
-            
-            task_query_hrrp_list.extend(X_data_pool_hrrp[query_indices_for_class])
-            task_query_labels_list.extend(y_data_pool_original[query_indices_for_class])
-            if X_data_pool_sc_list:
-                task_query_sc_list_list.extend([X_data_pool_sc_list[i] for i in query_indices_for_class])
+            # Store actual K support samples for the task (might be useful beyond prototypes)
+            task_support_hrrp_actual_samples.extend(X_data_pool_hrrp[current_class_support_indices])
+            task_support_labels_actual_samples.extend(y_data_pool_original[current_class_support_indices])
+            if X_data_pool_sc_list and sc_extraction_config["enabled"]:
+                task_support_sc_list_actual_samples.extend([X_data_pool_sc_list[i] for i in current_class_support_indices])
+            else: # Fill with empty lists if SCs not available/enabled for support
+                task_support_sc_list_actual_samples.extend([[] for _ in current_class_support_indices])
 
-        if not current_task_valid:
-            # print(f"  任务 {task_idx+1}/{num_tasks}: 构建时样本不足。跳过。")
-            continue
+            # Store Q query samples for the task
+            task_query_hrrp_list.extend(X_data_pool_hrrp[current_class_query_indices])
+            task_query_labels_list.extend(y_data_pool_original[current_class_query_indices])
+            if X_data_pool_sc_list and sc_extraction_config["enabled"]:
+                task_query_sc_list_list.extend([X_data_pool_sc_list[i] for i in current_class_query_indices])
+            else: # Fill with empty lists if SCs not available/enabled for query
+                task_query_sc_list_list.extend([[] for _ in current_class_query_indices])
+
+            # --- Calculate Prototype for this class (if K > 0) ---
+            if k_shot_support > 0 and sc_extraction_config["enabled"]:
+                # Get the SC lists for the K support samples of this class
+                class_k_support_sc_lists = [X_data_pool_sc_list[i] for i in current_class_support_indices if X_data_pool_sc_list] # Filter if X_data_pool_sc_list is None
+                
+                if not class_k_support_sc_lists and k_shot_support > 0 : # If all SC lists were empty or X_data_pool_sc_list was None
+                    prototype_sc_list_for_class = [] # Default to empty if no SC data for support
+                elif k_shot_support == 1:
+                    prototype_sc_list_for_class = class_k_support_sc_lists[0]
+                else: # K > 1
+                    try:
+                        class_support_feature_vectors = np.array([
+                            sc_set_to_feature_vector(sc_l, max_centers_for_proto_feat, sc_feature_type_for_proto)
+                            for sc_l in class_k_support_sc_lists
+                        ])
+                        if class_support_feature_vectors.ndim == 1 and class_support_feature_vectors.size == 0 : # Handles case where all sc_lists were empty
+                             prototype_sc_list_for_class = []
+                        elif class_support_feature_vectors.size == 0: # Should not happen if K > 1 and sc_lists are not all empty
+                             prototype_sc_list_for_class = []
+                        else:
+                            mean_feature_vector = np.mean(class_support_feature_vectors, axis=0)
+                            distances_to_mean = [euclidean(fv, mean_feature_vector) for fv in class_support_feature_vectors]
+                            closest_sample_idx_in_k = np.argmin(distances_to_mean)
+                            prototype_sc_list_for_class = class_k_support_sc_lists[closest_sample_idx_in_k]
+                    except Exception as e_proto:
+                        print(f"  Error calculating prototype for class {cls_name} in task {task_idx}: {e_proto}. Using empty SC list as prototype.")
+                        prototype_sc_list_for_class = []
+                
+                prototype_sc_text = encode_single_sc_set_to_text(prototype_sc_list_for_class, sc_encoding_config)
+                task_prototype_sc_texts_for_prompt.append(prototype_sc_text)
+                task_prototype_labels_for_prompt.append(cls_name) 
+            elif k_shot_support == 0: # 0-shot, no prototypes
+                pass 
+            elif not sc_extraction_config["enabled"] and k_shot_support > 0: # K > 0 but SCs disabled
+                task_prototype_sc_texts_for_prompt.append("散射中心信息不可用 (提取已禁用)")
+                task_prototype_labels_for_prompt.append(cls_name)
+
+
+        if not current_task_fully_valid: continue
         
-        # 编码SC为文本
-        task_support_sc_texts = encode_all_sc_sets_to_text(task_support_sc_list_list, sc_encoding_config) if X_data_pool_sc_list and task_support_sc_list_list else [""] * len(task_support_hrrp_list)
-        task_query_sc_texts = encode_all_sc_sets_to_text(task_query_sc_list_list, sc_encoding_config) if X_data_pool_sc_list and task_query_sc_list_list else [""] * len(task_query_hrrp_list)
+        task_query_sc_texts = encode_all_sc_sets_to_text(task_query_sc_list_list, sc_encoding_config) if sc_extraction_config["enabled"] else ["散射中心信息不可用"] * len(task_query_hrrp_list)
 
-        # 确保每个任务都有 N*K 支撑和 N*Q 查询
-        expected_support_size = n_way * k_shot_support
-        expected_query_size = n_way * q_shot_query
-        if len(task_support_labels_list) != expected_support_size or len(task_query_labels_list) != expected_query_size:
-            print(f"  警告: 任务 {task_idx+1} 样本数量不符预期。支撑: {len(task_support_labels_list)}/{expected_support_size}, 查询: {len(task_query_labels_list)}/{expected_query_size}。可能由于类别内样本不足 K+Q。跳过此任务。")
+        expected_S_size = n_way * k_shot_support
+        expected_Q_size = n_way * q_shot_query
+        if len(task_support_labels_actual_samples) != expected_S_size or len(task_query_labels_list) != expected_Q_size:
+            print(f"  警告: 任务 {task_idx+1} 样本数量不符预期。实际支撑: {len(task_support_labels_actual_samples)}/{expected_S_size}, 实际查询: {len(task_query_labels_list)}/{expected_Q_size}。跳过。")
+            continue
+        if k_shot_support > 0 and (len(task_prototype_sc_texts_for_prompt) != n_way or len(task_prototype_labels_for_prompt) != n_way):
+            print(f"  警告: 任务 {task_idx+1} 原型数量不为N ({len(task_prototype_sc_texts_for_prompt)}/{n_way})。跳过。")
             continue
 
 
         tasks.append({
-            "support_hrrp": np.array(task_support_hrrp_list),
-            "support_sc_list": task_support_sc_list_list,
-            "support_labels": np.array(task_support_labels_list),
-            "support_sc_texts": task_support_sc_texts,
+            "support_hrrp_actual": np.array(task_support_hrrp_actual_samples), # N*K actual support HRRPs
+            "support_sc_list_actual": task_support_sc_list_actual_samples,    # N*K actual support SC lists
+            "support_labels_actual": np.array(task_support_labels_actual_samples), # N*K actual support labels
+            
+            "support_prototypes_sc_texts": task_prototype_sc_texts_for_prompt, # N prototype SC texts for prompt
+            "support_prototypes_labels": task_prototype_labels_for_prompt,     # N prototype labels for prompt
+
             "query_hrrp": np.array(task_query_hrrp_list),
             "query_sc_list": task_query_sc_list_list,
             "query_labels": np.array(task_query_labels_list),
@@ -288,90 +352,93 @@ def build_fsl_tasks(
             "task_classes": selected_classes_for_task, 
         })
         
-    if not tasks:
-        print(f"警告 (build_fsl_tasks): 未能成功构建任何FSL任务。请检查数据池中各类别样本数量是否满足 K+Q，以及N-way设置。")
-    elif len(tasks) < num_tasks:
-        print(f"警告 (build_fsl_tasks): 成功构建了 {len(tasks)} 个FSL任务，少于请求的 {num_tasks} 个。可能是由于类别或样本不足。")
-    else:
-        print(f"成功构建了 {len(tasks)} 个FSL任务。")
+    if not tasks: print(f"警告 (build_fsl_tasks): 未能成功构建任何FSL任务。")
+    elif len(tasks) < num_tasks: print(f"警告 (build_fsl_tasks): 成功构建了 {len(tasks)} 个FSL任务，少于请求的 {num_tasks} 个。")
+    else: print(f"成功构建了 {len(tasks)} 个FSL任务。")
     return tasks
 
 
 if __name__ == "__main__":
-    class MockConfigDU_FSL_Strict: 
-        AVAILABLE_DATASETS = {"simulated_fsl_strict_test": {"path": "datasets_test/simulated_hrrp_fsl_strict", "data_var": "CoHH", "original_len": 1000, "max_samples_to_load": 150}} # 5 classes * 30 samples
-        TARGET_HRRP_LENGTH = 1000; PREPROCESS_MAT_TO_NPY = True; PROCESSED_DATA_DIR = "data_processed_test_fsl_strict"; 
-        TEST_SPLIT_SIZE = 0.01 # Make meta-train very small, meta-test large for this test
+    class MockConfigDU_FSL_Proto: 
+        AVAILABLE_DATASETS = {"simulated_fsl_proto_test": {"path": "datasets_test/simulated_hrrp_fsl_proto", "data_var": "CoHH", "original_len": 1000, "max_samples_to_load": 150}}
+        TARGET_HRRP_LENGTH = 1000; PREPROCESS_MAT_TO_NPY = True; PROCESSED_DATA_DIR = "data_processed_test_fsl_proto"; 
+        TEST_SPLIT_SIZE = 0.01 
         RANDOM_STATE = 42
         SCATTERING_CENTER_EXTRACTION = {"enabled": True, "method": "peak_detection", 
-                                        "peak_prominence": 0.1, 
-                                        "min_distance": 3,      
+                                        "peak_prominence": 0.1, "min_distance": 3,      
                                         "max_centers_to_keep": 5, 
                                         "normalize_hrrp_before_extraction": True, 
                                         "normalization_type_for_hrrp": "max"}
         SCATTERING_CENTER_ENCODING = {"format": "list_of_dicts", "precision_pos": 0, "precision_amp": 3, "TARGET_HRRP_LENGTH_INFO": TARGET_HRRP_LENGTH}
-        FSL_TASK_SETUP = {"n_way": 3, "k_shot_support": 5, "q_shot_query": 1, "num_fsl_tasks": 10} 
-        LIMIT_TEST_SAMPLES = None # Let build_fsl_tasks use the full meta-test set loaded
+        FSL_TASK_SETUP = {"n_way": 3, "k_shot_support": 2, "q_shot_query": 1, "num_fsl_tasks": 5, "sc_feature_type_for_prototype": "pos_amp_flat"} 
+        LIMIT_TEST_SAMPLES = None 
+        # Add a dummy config for sc_set_to_feature_vector if it's not in the main config structure that data_utils sees
+        # For this test, SCATTERING_CENTER_EXTRACTION['max_centers_to_keep'] is used by build_fsl_tasks.
 
-    config_module_for_data_utils.RANDOM_STATE = MockConfigDU_FSL_Strict.RANDOM_STATE
-    mock_config_fsl_strict = MockConfigDU_FSL_Strict()
+    config_module_for_data_utils.RANDOM_STATE = MockConfigDU_FSL_Proto.RANDOM_STATE
+    # Make SCATTERING_CENTER_EXTRACTION available if config_module_for_data_utils is a fallback
+    if not hasattr(config_module_for_data_utils, 'SCATTERING_CENTER_EXTRACTION'):
+        config_module_for_data_utils.SCATTERING_CENTER_EXTRACTION = MockConfigDU_FSL_Proto.SCATTERING_CENTER_EXTRACTION
+
+
+    mock_config_fsl_proto = MockConfigDU_FSL_Proto()
     
-    test_sim_path_fsl_strict = os.path.join(mock_config_fsl_strict.AVAILABLE_DATASETS["simulated_fsl_strict_test"]["path"])
-    os.makedirs(test_sim_path_fsl_strict, exist_ok=True); os.makedirs(mock_config_fsl_strict.PROCESSED_DATA_DIR, exist_ok=True)
+    test_sim_path_fsl_proto = os.path.join(mock_config_fsl_proto.AVAILABLE_DATASETS["simulated_fsl_proto_test"]["path"])
+    os.makedirs(test_sim_path_fsl_proto, exist_ok=True); os.makedirs(mock_config_fsl_proto.PROCESSED_DATA_DIR, exist_ok=True)
     
-    # Create data: 5 classes, each with 30 samples. K+Q = 5+1=6. So enough samples.
     num_mock_classes = 5
-    samples_per_mock_class = 30
-    if not glob.glob(os.path.join(test_sim_path_fsl_strict, "*.mat")):
-        print(f"创建虚拟.mat for FSL Strict测试..."); from scipy.io import savemat
+    samples_per_mock_class = 30 # K+Q = 2+1=3. So 30 is ample.
+    if not glob.glob(os.path.join(test_sim_path_fsl_proto, "*.mat")):
+        print(f"创建虚拟.mat for FSL Proto测试..."); from scipy.io import savemat
         for cl_idx in range(num_mock_classes): 
-            cl = f"Cls{chr(65+cl_idx)}" # ClsA, ClsB, ...
+            cl = f"ProtoCls{chr(65+cl_idx)}" 
             for i in range(samples_per_mock_class): 
-                random_data_complex = np.random.rand(mock_config_fsl_strict.TARGET_HRRP_LENGTH) + \
-                                      1j * np.random.rand(mock_config_fsl_strict.TARGET_HRRP_LENGTH)
-                savemat(os.path.join(test_sim_path_fsl_strict, f"{cl}_s{i}.mat"), {"CoHH": random_data_complex.reshape(-1, 1)})
-        print("FSL Strict虚拟文件创建完毕。")
+                random_data_complex = np.random.rand(mock_config_fsl_proto.TARGET_HRRP_LENGTH) + \
+                                      1j * np.random.rand(mock_config_fsl_proto.TARGET_HRRP_LENGTH)
+                savemat(os.path.join(test_sim_path_fsl_proto, f"{cl}_s{i}.mat"), {"CoHH": random_data_complex.reshape(-1, 1)})
+        print("FSL Proto虚拟文件创建完毕。")
 
-    print("--- 测试 prepare_npy_data_and_scattering_centers for FSL Strict ---"); 
-    prepare_npy_data_and_scattering_centers(mock_config_fsl_strict)
+    print("--- 测试 prepare_npy_data_and_scattering_centers for FSL Proto ---"); 
+    prepare_npy_data_and_scattering_centers(mock_config_fsl_proto)
     
-    print("\n--- 测试 load_processed_data for FSL Strict ---"); 
-    load_res_strict = load_processed_data("simulated_fsl_strict_test", mock_config_fsl_strict, load_scattering_centers=True)
-    if load_res_strict[0] is not None: 
-        print(f"数据加载成功 for simulated_fsl_strict_test")
-        # We will use the meta-test portion as the data pool for task building in this test
-        _, _, X_pool_h, y_pool_o, _, X_pool_sc, le_strict, c_names_strict = load_res_strict
-        print(f"  数据池 (来自元测试部分) HRRP: {X_pool_h.shape}, 标签: {y_pool_o.shape}")
-        if X_pool_sc: print(f"  数据池 SC列表长度: {len(X_pool_sc)}")
+    print("\n--- 测试 load_processed_data for FSL Proto ---"); 
+    load_res_proto = load_processed_data("simulated_fsl_proto_test", mock_config_fsl_proto, load_scattering_centers=True)
 
-        print("\n--- 测试 build_fsl_tasks (Strict N-way K-shot Q-query) ---")
-        fsl_tasks_strict = build_fsl_tasks(
-            X_pool_h, y_pool_o, X_pool_sc, # Using meta-test as the pool
-            le_strict, mock_config_fsl_strict.FSL_TASK_SETUP, 
-            mock_config_fsl_strict.SCATTERING_CENTER_ENCODING, 
-            mock_config_fsl_strict.RANDOM_STATE
-        )
-        if fsl_tasks_strict:
-            print(f"成功构建了 {len(fsl_tasks_strict)} 个FSL任务。")
-            cfg = mock_config_fsl_strict.FSL_TASK_SETUP
-            expected_S_size = cfg['n_way'] * cfg['k_shot_support']
-            expected_Q_size = cfg['n_way'] * cfg['q_shot_query']
-            for i, task in enumerate(fsl_tasks_strict[:2]): 
-                print(f"  任务 {i+1}:")
-                print(f"    类别: {task['task_classes']}")
-                print(f"    支撑集样本数: {len(task['support_labels'])} (预期: {expected_S_size})")
-                print(f"    查询集样本数: {len(task['query_labels'])} (预期: {expected_Q_size})")
-                # Check individual class counts if needed by looking at task['support_labels'] and task['query_labels']
-                unique_s_labels, s_counts = np.unique(task['support_labels'], return_counts=True)
-                print(f"      支撑集各类别样本数: {dict(zip(unique_s_labels, s_counts))}")
-                unique_q_labels, q_counts = np.unique(task['query_labels'], return_counts=True)
-                print(f"      查询集各类别样本数: {dict(zip(unique_q_labels, q_counts))}")
-
-                assert len(task['support_labels']) == expected_S_size
-                assert len(task['query_labels']) == expected_Q_size
-                for cls_in_task in task['task_classes']:
-                    assert np.sum(task['support_labels'] == cls_in_task) == cfg['k_shot_support']
-                    assert np.sum(task['query_labels'] == cls_in_task) == cfg['q_shot_query']
-
+    if load_res_proto[0] is not None or load_res_proto[2] is not None: # Check if either train or test data loaded
+        print(f"数据加载成功 for simulated_fsl_proto_test")
+        _, _, X_pool_h, y_pool_o, _, X_pool_sc, le_proto, c_names_proto = load_res_proto
+        
+        # Ensure pool has data
+        if X_pool_h is None or X_pool_h.size == 0:
+            print("错误: 元测试数据池在加载后为空，无法进行build_fsl_tasks测试。")
         else:
-            print("未能构建FSL任务 (Strict)。")
+            print(f"  数据池 (来自元测试部分) HRRP: {X_pool_h.shape}, 标签: {y_pool_o.shape}")
+            if X_pool_sc is not None: print(f"  数据池 SC列表长度: {len(X_pool_sc)}")
+
+            print("\n--- 测试 build_fsl_tasks (with Prototypes) ---")
+            fsl_tasks_proto = build_fsl_tasks(
+                X_pool_h, y_pool_o, X_pool_sc, 
+                le_proto, mock_config_fsl_proto.FSL_TASK_SETUP, 
+                mock_config_fsl_proto.SCATTERING_CENTER_ENCODING,
+                mock_config_fsl_proto.SCATTERING_CENTER_EXTRACTION, # Pass this for max_centers
+                mock_config_fsl_proto.RANDOM_STATE
+            )
+            if fsl_tasks_proto:
+                print(f"成功构建了 {len(fsl_tasks_proto)} 个带原型的FSL任务。")
+                cfg = mock_config_fsl_proto.FSL_TASK_SETUP
+                expected_Proto_S_count = cfg['n_way'] # N prototypes
+                expected_Q_size = cfg['n_way'] * cfg['q_shot_query']
+                for i, task in enumerate(fsl_tasks_proto[:1]): # Print details of first task
+                    print(f"  任务 {i+1}:")
+                    print(f"    类别: {task['task_classes']}")
+                    print(f"    支撑原型SC文本数: {len(task['support_prototypes_sc_texts'])} (预期: {expected_Proto_S_count})")
+                    print(f"    支撑原型标签数: {len(task['support_prototypes_labels'])} (预期: {expected_Proto_S_count})")
+                    print(f"    查询集样本数: {len(task['query_labels'])} (预期: {expected_Q_size})")
+                    
+                    assert len(task['support_prototypes_sc_texts']) == expected_Proto_S_count
+                    assert len(task['support_prototypes_labels']) == expected_Proto_S_count
+                    assert len(task['query_labels']) == expected_Q_size
+            else:
+                print("未能构建带原型的FSL任务。")
+    else:
+        print("加载FSL Proto测试数据失败。")

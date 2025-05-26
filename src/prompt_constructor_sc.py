@@ -47,6 +47,7 @@ class PromptConstructorSC:
         dataset_info = dataset_info_prefix + f" 候选目标类别包括：`{', '.join(self.class_names_for_task)}`。"
 
         reasoning_guidance = (
+            # "Let's think step by step.\n"
             "**推理步骤与要求：**\n"
             "1.  **审查测试样本散射中心**：仔细观察“测试样本散射中心”部分提供的数据。关注：\n"
             "    *   检测到的散射中心数量。\n"

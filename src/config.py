@@ -6,7 +6,7 @@ AVAILABLE_DATASETS = {
         "path": "datasets/simulated_hrrp",
         "data_var": "CoHH",
         "original_len": 1000,
-        "max_samples_to_load": 300 # 保持较小以测试
+        "max_samples_to_load": 300 
     },
 }
 TARGET_HRRP_LENGTH = 1000 
@@ -39,19 +39,23 @@ SCATTERING_CENTER_ENCODING = {
 # --- FSL Episode/Task 和 Prompt 示例选择配置 ---
 FSL_TASK_SETUP = {
     "enabled": True,
-    "n_way": 5,                 # N: 每个任务中类别的数量
-    "k_shot_support": 1,        # K: 每个类别在支撑集中的样本数量
-    "q_shot_query": 1,          # Q (n_q): 每个类别在查询集中的样本数量 (按用户要求设为1)
-    "num_fsl_tasks": 20,        # 要生成和评估的FSL任务数量
+    "n_way": 12,                 
+    "k_shot_support": 1, # MODIFIED: Set K=1 for example, can be >1 for prototype calculation
+    "q_shot_query": 1,          
+    "num_fsl_tasks": 50,        
+    "sc_feature_type_for_prototype": "pos_amp_flat" # MODIFIED: Added for prototype calculation
 }
 
 # --- LLM API 与 Prompt 配置 ---
-OPENAI_API_KEY = os.getenv("DEEPSEEK_API_KEY", "sk-59f809e831cf4859935d949b41985ae8") 
-OPENAI_PROXY_BASE_URL = "https://api.deepseek.com" 
+# OPENAI_API_KEY = os.getenv("DEEPSEEK_API_KEY", "sk-59f809e831cf4859935d949b41985ae8")
+# OPENAI_PROXY_BASE_URL = "https://api.deepseek.com"
+
+OPENAI_API_KEY = os.getenv("DEEPSEEK_API_KEY", "sk-g0UhooVGGk8r9l3pDZjHbQ")
+OPENAI_PROXY_BASE_URL = "https://llmapi.blsc.cn/v1/"
 
 LLM_CALLER_PARAMS = {
-    "model_name": "deepseek-chat", 
-    "temperature": 0.1, 
+    "model_name": "QwQ-N011-32B",
+    "temperature": 1.0,
     "top_p": 1.0,
     "max_tokens_completion": 200, 
     "frequency_penalty": 0.0,
@@ -59,9 +63,7 @@ LLM_CALLER_PARAMS = {
     "api_retry_delay": 5,       
     "max_retries": 3            
 }
-# LIMIT_TEST_SAMPLES: 这个参数现在用于在加载数据后，初步限制元测试集的大小。
-# FSL任务将从这个（可能被限制的）元测试集中采样。
-LIMIT_TEST_SAMPLES = 100 
+LIMIT_TEST_SAMPLES = 2000 
 
 # --- 实验结果保存 ---
 RESULTS_BASE_DIR = "results"
