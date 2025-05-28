@@ -15,7 +15,7 @@ def encode_single_sc_set_to_text(scattering_centers, encoding_config):
 
     if fmt == "list_of_dicts":
         for pos, amp in scattering_centers:
-            output_parts.append(f"  {{'位置索引': {pos:.{prec_pos}f}, '相对幅度': {amp:.{prec_amp}f}}}")
+            output_parts.append(f"  {{'range index': {pos:.{prec_pos}f}, 'normalized amplitude': {amp:.{prec_amp}f}}}")
         return "[\n" + ",\n".join(output_parts) + "\n]"
     elif fmt == "condensed_string":
         center_sep = encoding_config.get("center_separator", "; ")

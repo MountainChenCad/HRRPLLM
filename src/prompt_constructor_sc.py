@@ -1,151 +1,192 @@
+# src/prompt_constructor_sc.py
 import random
+
 try:
-    # 尝试从config导入，主要为了TARGET_HRRP_LENGTH作为后备
     from config import TARGET_HRRP_LENGTH as FALLBACK_TARGET_HRRP_LENGTH
 except ImportError:
-    FALLBACK_TARGET_HRRP_LENGTH = 1000 # Fallback for standalone testing
-    print("无法从config导入FALLBACK_TARGET_HRRP_LENGTH，使用默认值1000。")
+    FALLBACK_TARGET_HRRP_LENGTH = 1000
+    print("Warning (PromptConstructorSC): Could not import FALLBACK_TARGET_HRRP_LENGTH from config, using default 1000.")
 
 
-class PromptConstructorSC: 
-    def __init__(self, dataset_name_key, class_names_for_task, sc_encoding_config):
-        """
-        Args:
-            dataset_name_key (str): 数据集标识符.
-            class_names_for_task (list): 当前FSL任务中涉及的类别名称列表.
-            sc_encoding_config (dict): 散射中心编码配置.
-        """
+class PromptConstructorSC:
+    def __init__(self, dataset_name_key, class_names_for_task, sc_encoding_config,
+                 # --- Ablation Flags ---
+                 include_system_instruction=True,
+                 include_background_knowledge=True,
+                 include_candidate_list=True,
+                 include_output_format_instruction=True
+                 ):
         self.dataset_name_key = dataset_name_key
-        self.class_names_for_task = class_names_for_task # 当前任务的类别
+        self.class_names_for_task = class_names_for_task
         self.sc_encoding_config = sc_encoding_config
-        # TARGET_HRRP_LENGTH_INFO 应该在 sc_encoding_config 中提供
         self.hrrp_length_info = self.sc_encoding_config.get('TARGET_HRRP_LENGTH_INFO', FALLBACK_TARGET_HRRP_LENGTH)
+
+        self.include_system_instruction = include_system_instruction
+        self.include_background_knowledge = include_background_knowledge
+        self.include_candidate_list = include_candidate_list
+        self.include_output_format_instruction = include_output_format_instruction
+
         self.context_header = self._build_context_header_for_sc()
 
     def _build_context_header_for_sc(self):
+        # --- English Translations ---
         task_definition = (
-            "你是一位雷达目标识别专家，擅长通过分析目标的散射中心特性来识别目标类型。"
-            "你的任务是根据提供的主要散射中心信息（位置索引和相对幅度），从候选列表中准确识别出目标。"
+            "You are a radar target recognition expert, skilled at identifying target types by analyzing their scattering center characteristics."
+            "Your task is to accurately identify the target from a list of candidates based on the provided primary scattering center information (position index and relative amplitude)."
         )
-        
+
         sc_description = (
-            "散射中心是目标上雷达回波能量集中的主要区域。它们通常对应于目标的几何不连续点、边缘、角点或强反射面。"
-            "通过分析散射中心的数量、它们的相对位置（距离单元索引）以及各自的相对幅度，可以推断目标的尺寸、形状和结构特征。"
-            f"在本任务中，提供的散射中心信息是从长度为 {self.hrrp_length_info} 的一维高分辨率距离像（HRRP）中提取并按幅度降序排列的。"
-            "“位置索引”从0开始计数，代表在原始HRRP序列中的位置。"
-            "“相对幅度”是经过归一化处理的（最大值为1）。"
+            "Scattering centers are the primary regions on a target where radar echo energy is concentrated. They typically correspond to geometric discontinuities, edges, corners, or strong reflective surfaces of the target."
+            "By analyzing the number of scattering centers, their relative positions (range bin indices), and their respective relative amplitudes, one can infer the target's size, shape, and structural features."
+            f"In this task, the provided scattering center information is extracted from a 1D High-Resolution Range Profile (HRRP) of length {self.hrrp_length_info} and is sorted in descending order of amplitude."
+            "The 'position index' starts counting from 0, representing the position in the original HRRP sequence."
+            "The 'relative amplitude' is normalized (e.g., the maximum value is 1)."
         )
 
         if "simulated" in self.dataset_name_key.lower():
-            dataset_info_prefix = f"当前分析的数据来源于 **仿真HRRP的散射中心数据**。"
+            dataset_info_prefix = "The data currently being analyzed originates from **simulated HRRP scattering center data**."
         elif "measured" in self.dataset_name_key.lower():
-            dataset_info_prefix = f"当前分析的数据来源于 **实测HRRP的散射中心数据**。"
+            dataset_info_prefix = "The data currently being analyzed originates from **measured HRRP scattering center data**."
         else:
-            dataset_info_prefix = "当前分析的数据为HRRP的散射中心数据。"
-        
-        # 使用任务特定的类别列表
-        dataset_info = dataset_info_prefix + f" 候选目标类别包括：`{', '.join(self.class_names_for_task)}`。"
+            dataset_info_prefix = "The data currently being analyzed is HRRP scattering center data."
 
-        reasoning_guidance = (
-            # "Let's think step by step.\n"
-            "**推理步骤与要求：**\n"
-            "1.  **审查测试样本散射中心**：仔细观察“测试样本散射中心”部分提供的数据。关注：\n"
-            "    *   检测到的散射中心数量。\n"
-            "    *   最强几个散射中心的位置索引及其相对幅度。\n"
-            f"    *   散射中心在整个目标长度（0到{self.hrrp_length_info-1}）上的大致分布模式（例如，集中在前端、后端、均匀分布等）。\n"
-            "2.  **参考支撑样本**：将测试样本的散射中心特征与“邻近训练样本参考”中的已知类别样本进行对比。\n"
-            "    *   注意每个参考样本的已知类别，并比较其散射中心模式与测试样本的相似性。\n"
-            "3.  **综合判断**：结合你对不同类型目标散射中心分布规律的理解，并基于与参考样本的对比，判断测试样本最符合哪个候选类别。\n"
-            "4.  **输出格式**：\n"
-            "    *   在你的回答的第一行，请明确给出预测的目标类别，格式为：`预测目标类别：[此处填写候选类别中的一个名称]`\n"
-            "    *   在后续行中，请简要陈述你做出此判断的主要理由，例如基于散射中心的数量、位置、特定模式，或与哪个参考样本最相似。"
+        candidate_list_text = ""
+        if self.include_candidate_list and self.class_names_for_task:
+            candidate_list_text = f" Candidate target classes include: `{', '.join(self.class_names_for_task)}`."
+        elif not self.class_names_for_task and self.include_candidate_list:
+            print(
+                "Warning (PromptConstructorSC): include_candidate_list is True, but class_names_for_task is empty. No candidate list will be included.")
+
+        dataset_info = dataset_info_prefix + candidate_list_text
+
+        reasoning_guidance_intro = "**Reasoning Steps and Requirements:**\n"
+        reasoning_step1 = (
+            "1.  **Examine Test Sample Scattering Centers**: Carefully observe the data provided in the 'Test Sample Scattering Centers' section. Focus on:\n"
+            "    *   The number of detected scattering centers.\n"
+            "    *   The position indices and relative amplitudes of the strongest few scattering centers.\n"
+            f"    *   The approximate distribution pattern of scattering centers across the entire target length (0 to {self.hrrp_length_info - 1}) (e.g., concentrated at the front, rear, evenly distributed, etc.).\n"
         )
-        
-        header = (
-            f"{task_definition}\n\n"
-            f"**散射中心特性概述：**\n{sc_description}\n\n"
-            f"**当前数据集与任务：**\n{dataset_info}\n\n"
-            f"{reasoning_guidance}\n\n"
-            f"------------------------------------\n"
+        reasoning_step2 = "2.  **Reference Neighboring/Support Samples (if provided)**: Compare the scattering center features of the test sample with those of known class samples in the 'Neighboring Training Sample Reference'.\n" \
+                          "    *   Note the known class of each reference sample and compare the similarity of its scattering center pattern to the test sample.\n"
+        reasoning_step3 = "3.  **Make a Comprehensive Judgment**: Based on your understanding of scattering center distribution patterns for different target types and the comparison with reference samples, determine which candidate class the test sample most closely matches.\n"
+
+        output_format_instruction_text = (
+            "4.  **Output Format**:\n"
+            "    *   On the first line of your response, please clearly state the predicted target class in the format: `Predicted Target Class: [Fill in one of the candidate class names here]`\n"
+            "    *   In subsequent lines, briefly state your main reasons for this judgment, e.g., based on the number, position, or specific pattern of scattering centers, or similarity to a reference sample."
         )
-        return header
+        # --- End English Translations ---
+
+        reasoning_parts = []
+        if self.include_system_instruction:
+            reasoning_parts.append(reasoning_step1)
+            reasoning_parts.append(reasoning_step2)
+            reasoning_parts.append(reasoning_step3)
+
+        if self.include_output_format_instruction:
+            if not self.include_system_instruction and reasoning_parts:
+                output_format_instruction_text = output_format_instruction_text.replace("4.", f"{len(reasoning_parts) + 1}.")
+            elif not self.include_system_instruction:
+                output_format_instruction_text = output_format_instruction_text.replace("4.", "1.")
+            reasoning_parts.append(output_format_instruction_text)
+
+        full_reasoning_guidance = ""
+        if reasoning_parts:
+            full_reasoning_guidance = reasoning_guidance_intro + "".join(reasoning_parts)
+
+        header_parts = []
+        if self.include_system_instruction:
+            header_parts.append(f"{task_definition}\n\n")
+        if self.include_background_knowledge:
+            header_parts.append(f"**Scattering Center Characteristics Overview:**\n{sc_description}\n\n")
+        header_parts.append(f"**Current Dataset and Task:**\n{dataset_info}\n\n")
+        if full_reasoning_guidance:
+            header_parts.append(f"{full_reasoning_guidance}\n\n")
+        header_parts.append(f"------------------------------------\n")
+        return "".join(header_parts)
 
     def construct_prompt_with_sc(self, query_sc_text, neighbor_sc_examples=None):
-        """
-        构建基于散射中心的完整prompt。
-        Args:
-            query_sc_text (str): 当前待查询样本散射中心的文本编码。
-            neighbor_sc_examples (list of tuples, optional): [(sc_text_1, label_1), ...]。
-                                                        这些是当前FSL任务的支撑样本。
-        """
-        prompt = self.context_header # context_header 现在使用 task-specific class_names
+        prompt = self.context_header
 
         if neighbor_sc_examples and len(neighbor_sc_examples) > 0:
-            prompt += "**邻近训练样本参考（支撑集）：**\n"
+            prompt += "**Neighboring Training Sample Reference (Support Set Prototypes):**\n" # English
             for i, (neighbor_text, neighbor_label) in enumerate(neighbor_sc_examples):
-                prompt += f"\n--- 参考样本 {i+1} ---\n"
-                prompt += f"已知目标类别：`{neighbor_label}`\n"
-                prompt += f"其主要散射中心信息：\n{neighbor_text}\n"
+                prompt += f"\n--- Reference Prototype {i + 1} ---\n" # English
+                prompt += f"Known Target Class: `{neighbor_label}`\n" # English
+                prompt += f"Its primary scattering center information:\n{neighbor_text}\n" # English
             prompt += "------------------------------------\n"
-        else:
-            prompt += "**注意：本次预测无邻近训练样本参考（0-shot任务）。请基于散射中心特性概述和自身知识进行判断。**\n"
+        elif self.include_system_instruction:
+            prompt += "**Note: No neighboring training samples (prototypes) are provided for this prediction (0-shot task). Please make your judgment based on the scattering center characteristics overview and your own knowledge.**\n" # English
             prompt += "------------------------------------\n"
-        
-        prompt += "**测试样本散射中心（请基于此进行预测）：**\n"
+
+        prompt += "**Test Sample Scattering Centers (Please predict based on this):**\n" # English
         prompt += f"{query_sc_text}\n\n"
-        prompt += "请严格按照输出格式要求回答。\n" # 强调格式
-        prompt += "预测目标类别：" # LLM将在此后继续
+
+        if self.include_output_format_instruction:
+            prompt += "Please strictly follow the output format requirements.\n" # English
+            prompt += "Predicted Target Class: " # English
+        elif self.include_candidate_list:
+            prompt += "Predicted Target Class: " # English
+        else:
+            prompt += "Your judgment is: " # English
 
         return prompt
 
+
 if __name__ == "__main__":
-    try: 
+    try:
         from config import SCATTERING_CENTER_ENCODING as mock_sc_encoding_config_main
         from config import TARGET_HRRP_LENGTH as mock_target_hrrp_length_main
-        # 确保 TARGET_HRRP_LENGTH_INFO 在 mock 配置中
+
         if 'TARGET_HRRP_LENGTH_INFO' not in mock_sc_encoding_config_main:
-             mock_sc_encoding_config_main['TARGET_HRRP_LENGTH_INFO'] = mock_target_hrrp_length_main
-    except ImportError: 
+            mock_sc_encoding_config_main['TARGET_HRRP_LENGTH_INFO'] = mock_target_hrrp_length_main
+    except ImportError:
         mock_target_hrrp_length_main = 1000
         mock_sc_encoding_config_main = {
-            "format": "list_of_dicts", 
-            "precision_pos": 0, 
-            "precision_amp": 3,
+            "format": "list_of_dicts", "precision_pos": 0, "precision_amp": 3,
             "TARGET_HRRP_LENGTH_INFO": mock_target_hrrp_length_main
         }
-        print("无法从config导入，使用默认测试配置。")
+        print("Warning (PromptConstructorSC): Could not import from config, using default test configurations.")
 
-    from scattering_center_encoder import encode_single_sc_set_to_text # 确保导入
+    # Assuming scattering_center_encoder.py is in the same directory or PYTHONPATH
+    try:
+        from scattering_center_encoder import encode_single_sc_set_to_text
+    except ImportError:
+        print("Error: Could not import encode_single_sc_set_to_text. Make sure scattering_center_encoder.py is accessible.")
+        # Define a dummy function if not available for the test to run without erroring out immediately
+        def encode_single_sc_set_to_text(sc_set, encoding_config):
+            return "Dummy SC Text"
+
 
     mock_dataset_name_sc = "simulated_sc_test"
-    # 假设这是一个3-way的任务
-    mock_class_names_for_task_sc = ["F-22", "T-72", "MQ-9"] 
-    
-    constructor_sc = PromptConstructorSC(mock_dataset_name_sc, mock_class_names_for_task_sc, mock_sc_encoding_config_main)
-    
+    mock_class_names_for_task_sc = ["F-22", "T-72", "MQ-9"]
+
     dummy_sc_1 = [(100, 0.9), (150, 0.7), (50, 0.6)]
-    dummy_sc_2 = [(200, 0.95), (210, 0.88), (190, 0.8), (500, 0.5)]
     query_sc = [(98, 0.88), (152, 0.72), (45, 0.65)]
-
     sc_text_1 = encode_single_sc_set_to_text(dummy_sc_1, mock_sc_encoding_config_main)
-    sc_text_2 = encode_single_sc_set_to_text(dummy_sc_2, mock_sc_encoding_config_main)
-    query_sc_text_main = encode_single_sc_set_to_text(query_sc, mock_sc_encoding_config_main) # 避免与全局变量冲突
+    query_sc_text_main = encode_single_sc_set_to_text(query_sc, mock_sc_encoding_config_main)
+    mock_neighbors_sc = [(sc_text_1, "F-22")]
 
-    mock_neighbors_sc = [
-        (sc_text_1, "F-22"), # 支撑样本1
-        (sc_text_2, "T-72")  # 支撑样本2
-    ]
+    print("\n--- Testing Full Prompt (English) ---")
+    constructor_full = PromptConstructorSC(mock_dataset_name_sc, mock_class_names_for_task_sc,
+                                           mock_sc_encoding_config_main)
+    prompt_full = constructor_full.construct_prompt_with_sc(query_sc_text_main, mock_neighbors_sc)
+    print(prompt_full[:600] + "...") # Print a bit more for English
+    with open("test_prompt_ablation_full_en.txt", "w", encoding="utf-8") as f:
+        f.write(prompt_full)
 
-    print("--- 测试 0-shot SC Prompt ---")
-    prompt_0shot_sc = constructor_sc.construct_prompt_with_sc(query_sc_text_main)
-    # print(prompt_0shot_sc) # 打印查看
-    with open("test_prompt_0shot_sc.txt", "w", encoding="utf-8") as f:
-        f.write(prompt_0shot_sc)
-    print("0-shot SC prompt 已保存到 test_prompt_0shot_sc.txt")
+    print("\n--- Testing Ablation: No System Instruction (English) ---")
+    constructor_no_sys = PromptConstructorSC(mock_dataset_name_sc, mock_class_names_for_task_sc,
+                                             mock_sc_encoding_config_main, include_system_instruction=False)
+    prompt_no_sys = constructor_no_sys.construct_prompt_with_sc(query_sc_text_main, mock_neighbors_sc)
+    print(prompt_no_sys[:600] + "...")
+    with open("test_prompt_ablation_no_sys_en.txt", "w", encoding="utf-8") as f:
+        f.write(prompt_no_sys)
 
-    print("\n--- 测试 K-shot SC Prompt ---")
-    prompt_kshot_sc = constructor_sc.construct_prompt_with_sc(query_sc_text_main, mock_neighbors_sc)
-    # print(prompt_kshot_sc) # 打印查看
-    with open("test_prompt_kshot_sc.txt", "w", encoding="utf-8") as f:
-        f.write(prompt_kshot_sc)
-    print("K-shot SC prompt 已保存到 test_prompt_kshot_sc.txt")
+    # ... (you can add more ablation tests here for English prompts if needed) ...
+
+    print("\n--- Testing Ablation: 0-shot (English) ---")
+    prompt_0shot = constructor_full.construct_prompt_with_sc(query_sc_text_main, None)
+    print(prompt_0shot[:600] + "...")
+    with open("test_prompt_ablation_0shot_en.txt", "w", encoding="utf-8") as f:
+        f.write(prompt_0shot)
