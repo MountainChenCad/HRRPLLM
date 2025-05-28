@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="Black">
+    <option name="sdkName" value="CLIP (4)" />
+  </component>
+  <component name="ProjectRootManager" version="2" project-jdk-name="ao_detr_env_v2" project-jdk-type="Python SDK" />
+</project>
