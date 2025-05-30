@@ -27,7 +27,7 @@ class OpenAICaller(BaseCaller):
         # This includes "o1" as per the error, and potentially "o1-mini", "o1-preview"
         # Also, some newer models or endpoints might adopt this.
         # A more general check could be for "o1" or "oone" or specific model IDs.
-        if self.model_name.startswith("o1") or "oone" in self.model_name.lower() or \
+        if self.model_name.startswith("o1") or "oone" or self.model_name.startswith("o3") in self.model_name.lower() or \
                 "gpt-4.5" in self.model_name.lower() or "gpt-4.1" in self.model_name.lower():  # Add other prefixes if known
             max_tokens_param_name = "max_completion_tokens"
             print(f"  Note: Using '{max_tokens_param_name}' for model: {self.model_name}")

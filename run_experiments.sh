@@ -1,188 +1,209 @@
 #!/bin/bash
 
-# This script automates running multiple FSL experiments with different LLMs and scenarios.
+echo "Starting Main Comparative Experiments Script"
 
 # --- Global Configuration ---
-# These can be overridden for specific model groups if needed
-DEFAULT_N_WAY=5
-DEFAULT_NUM_FSL_TASKS=20 # Number of FSL tasks per experiment run
-DEFAULT_DATASET_KEY="simulated" # Ensure this dataset is configured in config.py
-DEFAULT_LIMIT_TEST_SAMPLES="None" # Or a number like 100. "None" means no limit beyond dataset's max_samples_to_load.
-ROOT_RESULTS_DIR="results" # Should match config.py
+DEFAULT_N_WAY=3
+DEFAULT_Q_QUERY=1 # Q=1 as per your FSL setup
+DEFAULT_NUM_FSL_TASKS=30
+DEFAULT_DATASET_KEY="measured"
+DEFAULT_LIMIT_TEST_SAMPLES="None"
+RESULTS_DIR_MAIN_EXP="results/main_experiments" # Specific directory for these main results
+LLM_RESULTS_CSV="${RESULTS_DIR_MAIN_EXP}/llm_comparative_results.csv"
+BASELINE_RESULTS_CSV="${RESULTS_DIR_MAIN_EXP}/baseline_results.csv"
 
-# FSL Scenarios to test (K_shot_support, Q_shot_query)
-# Format: "K_VALUE,Q_VALUE"
-FSL_SCENARIOS=(
-    "1,1"  # Scenario 1: 5-Way 1-Shot 1-Query
-#    "5,1"  # Scenario 2: 5-Way 5-Shot 1-Query (as per user's table example, K=3 was a typo in table)
-)
 
-# --- API Key Configuration ---
-# It's best to set these as environment variables or use a secure vault.
-# For this script, we'll define them here. Replace with your actual keys.
-# Key for DeepSeek Platform / ZhipuAI GLM (on your supercomputer)
+# FSL Scenarios for LLMs (K_shot_support)
+# We will iterate K values: 1 and 5
+K_SHOT_VALUES=(1)
+
+# --- API Key Configuration (Ensure these are correct) ---
 DEEPSEEK_PLATFORM_API_KEY="sk-c46c479bff48429dbdf15094c81f086e"
-DEEPSEEK_PLATFORM_BASE_URL="https://api.deepseek.com"
+DEEPSEEK_PLATFORM_BASE_URL="https://api.deepseek.com" # Ensure /v1 is added if needed by specific models/proxy
 
 CHAOSUAN_PLATFORM_API_KEY="sk-g0UhooVGGk8r9l3pDZjHbQ"
 CHAOSUAN_BASE_URL="https://llmapi.blsc.cn/v1"
 
-# Key for OpenAI, Anthropic, Google (via your proxy: api.openai-proxy.live)
 PROXY_API_KEY="sk-fim815RQQnKhcbB7C5LbKjdkJsc7YyMjn6L6d6FReGJj5kUZ"
-
-# --- Base URL / Endpoint Configuration ---
 OPENAI_PROXY_BASE_URL="https://api.openai-proxy.live/v1"
 ANTHROPIC_PROXY_BASE_URL="https://api.openai-proxy.live/anthropic"
 GOOGLE_PROXY_API_ENDPOINT="https://api.openai-proxy.live/google"
 
 
-# --- Model Definitions ---
-# Structure: "MODEL_NAME|API_PROVIDER|API_KEY_VAR_NAME|BASE_URL_VAR_NAME_OR_ENDPOINT_VAR_NAME|GROUP_TAG"
-# API_KEY_VAR_NAME and BASE_URL_VAR_NAME should refer to the variables defined above.
-# For Google, the BASE_URL_VAR_NAME will be treated as the API_ENDPOINT.
-
+# --- Model Definitions (from your provided list) ---
 MODELS_TO_TEST=(
-    # A. 基准与快速迭代组 (免费/轻量) - Assuming these are on DeepSeek Platform or ZhipuAI GLM
-    "GLM-4-Flash-P002|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupA_GLM-4-Flash-P002"
-    "DeepSeek-R1-N011-Distill-Qwen-7B|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupA_DeepSeek-R1-N011-Distill-Qwen-7B"
-    "GLM-Z1-Flash-P002|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupA_GLM-Z1-Flash-P002"
+#    # A. Benchmark & Fast Iteration
+#    "GLM-4-Flash-P002|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupA"
+    "DeepSeek-R1-N011-Distill-Qwen-7B|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupA"
+    "GLM-Z1-Flash-P002|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupA"
+    "gpt-4o-mini|openai|PROXY_API_KEY|OPENAI_PROXY_BASE_URL|GroupA"
+    "gpt-3.5-turbo|openai|PROXY_API_KEY|OPENAI_PROXY_BASE_URL|GroupA"
 
-    # OpenAI Platform Models (via Proxy)
-    "gpt-4o-mini|openai|PROXY_API_KEY|OPENAI_PROXY_BASE_URL|GroupA_OpenAI_Mini"
-    "gpt-3.5-turbo|openai|PROXY_API_KEY|OPENAI_PROXY_BASE_URL|GroupA_OpenAI_3.5T"
+    # B. Mid-Tier & Inference Optimized
+    "gpt-4o|openai|PROXY_API_KEY|OPENAI_PROXY_BASE_URL|GroupB"
+    "GLM-4-Air-P002|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupB"
+    "GLM-4-Long-P002|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupB" # Note: Long context not directly tested by K-shot variation here
+    "GLM-Z1-Air-P002|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupB"
+    "QwQ-N011-32B|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupB"
+    "Qwen3-32B|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupB"
+    "deepseek-coder|deepseek_platform|DEEPSEEK_PLATFORM_API_KEY|DEEPSEEK_PLATFORM_BASE_URL|GroupB"
+    "claude-3-haiku-20240307|anthropic|PROXY_API_KEY|ANTHROPIC_PROXY_BASE_URL|GroupB"
+    "claude-3-sonnet-20240229|anthropic|PROXY_API_KEY|ANTHROPIC_PROXY_BASE_URL|GroupB"
+    "gemini-1.5-flash-latest|google|PROXY_API_KEY|GOOGLE_PROXY_API_ENDPOINT|GroupB"
 
-    # B. 中坚力量与推理优化组
-    "gpt-4o|openai|PROXY_API_KEY|OPENAI_PROXY_BASE_URL|GroupB_OpenAI_4o"
-    "GLM-4-Air-P002|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupB_GLM-4-Air-P002"
-    "GLM-4-Long-P002|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupB_GLM-4-Long-P002"
-    "GLM-Z1-Air-P002|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupB_GLM-Z1-Air-P002"
-    "QwQ-N011-32B|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupB_QwQ-N011-32B"
-    "Qwen3-32B|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupB_Qwen3-32B"
-    "deepseek-coder|deepseek_platform|DEEPSEEK_PLATFORM_API_KEY|DEEPSEEK_PLATFORM_BASE_URL|GroupB_DeepSeek_Coder" # Example
+    # C. High-Performance & SOTA
+    "gpt-4-turbo|openai|PROXY_API_KEY|OPENAI_PROXY_BASE_URL|GroupC"
+    "gpt-4|openai|PROXY_API_KEY|OPENAI_PROXY_BASE_URL|GroupC"
+    "gemini-1.5-pro-latest|google|PROXY_API_KEY|GOOGLE_PROXY_API_ENDPOINT|GroupC"
+    "claude-3-opus-20240229|anthropic|PROXY_API_KEY|ANTHROPIC_PROXY_BASE_URL|GroupC"
+    "gpt-4.1|openai|PROXY_API_KEY|OPENAI_PROXY_BASE_URL|GroupC_Newer" # Assuming gpt-4.1 is a distinct model entry
+    "o3-2025-04-16|openai|PROXY_API_KEY|OPENAI_PROXY_BASE_URL|GroupC_Newer"
+    "o1|openai|PROXY_API_KEY|OPENAI_PROXY_BASE_URL|GroupC_Newer" # Ensure 'o1' is the correct API identifier
+    "claude-opus-4-20250514|anthropic|PROXY_API_KEY|ANTHROPIC_PROXY_BASE_URL|GroupC_Newer"
+    "claude-sonnet-4-20250514|anthropic|PROXY_API_KEY|ANTHROPIC_PROXY_BASE_URL|GroupC_Newer"
+    "claude-3-7-sonnet-20250219|anthropic|PROXY_API_KEY|ANTHROPIC_PROXY_BASE_URL|GroupC_Newer"
+    "claude-3-5-sonnet-20241022|anthropic|PROXY_API_KEY|ANTHROPIC_PROXY_BASE_URL|GroupC_Newer"
+    "gemini-2.5-flash-preview-04-17|google|PROXY_API_KEY|GOOGLE_PROXY_API_ENDPOINT|GroupC_Newer"
+    "GLM-4-Plus-P002|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupC_Zhipu"
+    "Qwen3-235B-A22B|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupC_Zhipu"
+    "DeepSeek-V3-P001|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupC_Zhipu" # This might be DeepSeek model on Zhipu platform
+    "deepseek-chat|deepseek_platform|DEEPSEEK_PLATFORM_API_KEY|DEEPSEEK_PLATFORM_BASE_URL|GroupC_DeepSeek"
+    "deepseek-reasoner|deepseek_platform|DEEPSEEK_PLATFORM_API_KEY|DEEPSEEK_PLATFORM_BASE_URL|GroupC_DeepSeek"
 
-    # Anthropic Models (via Proxy)
-    "claude-3-haiku-20240307|anthropic|PROXY_API_KEY|ANTHROPIC_PROXY_BASE_URL|GroupB_Claude_Haiku"
-    "claude-3-sonnet-20240229|anthropic|PROXY_API_KEY|ANTHROPIC_PROXY_BASE_URL|GroupB_Claude_Sonnet"
-    "claude-3-opus-20240229|anthropic|PROXY_API_KEY|ANTHROPIC_PROXY_BASE_URL|GroupC_Claude_Opus"
-    # Google Models (via Proxy)
-    "gemini-1.5-flash-latest|google|PROXY_API_KEY|GOOGLE_PROXY_API_ENDPOINT|GroupB_Gemini_Flash"
-
-#     C. 高性能与旗舰SOTA组
-    "gpt-4-turbo|openai|PROXY_API_KEY|OPENAI_PROXY_BASE_URL|GroupC_OpenAI_4T"
-    "gpt-4|openai|PROXY_API_KEY|OPENAI_PROXY_BASE_URL|GroupC_OpenAI_gpt4"
-    "gemini-1.5-pro-latest|google|PROXY_API_KEY|GOOGLE_PROXY_API_ENDPOINT|GroupC_Gemini_Pro"
-    "gpt-4.1|openai|PROXY_API_KEY|OPENAI_PROXY_BASE_URL|GroupC_gpt-4.1"
-    "o3-2025-04-16|openai|PROXY_API_KEY|OPENAI_PROXY_BASE_URL|GroupC_o3-2025-04-16"
-    "o1|openai|PROXY_API_KEY|OPENAI_PROXY_BASE_URL|GroupC_o1"
-    "claude-opus-4-20250514|anthropic|PROXY_API_KEY|ANTHROPIC_PROXY_BASE_URL|GroupC_claude-opus-4-20250514"
-    "claude-sonnet-4-20250514|anthropic|PROXY_API_KEY|ANTHROPIC_PROXY_BASE_URL|GroupC_claude-sonnet-4-20250514"
-    "claude-3-7-sonnet-20250219|anthropic|PROXY_API_KEY|ANTHROPIC_PROXY_BASE_URL|GroupC_claude-3-7-sonnet-20250219"
-    "claude-3-5-sonnet-20241022|anthropic|PROXY_API_KEY|ANTHROPIC_PROXY_BASE_URL|GroupC_claude-3-5-sonnet-20241022"
-    "gemini-2.5-flash-preview-04-17|google|PROXY_API_KEY|GOOGLE_PROXY_API_ENDPOINT|GroupC_gemini-2.5-flash-preview-04-17" # Your current model
-    "GLM-4-Plus-P002|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupC_GLM-4-Plus-P002"
-
-    # Add more models from your list here following the format:
-    # "MODEL_IDENTIFIER_FOR_API|api_provider_name|API_KEY_VARIABLE|BASE_URL_or_ENDPOINT_VARIABLE|YourGroupTag"
-    "Qwen3-235B-A22B|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupC_Qwen3-235B-A22B"
-    "DeepSeek-V3-P001|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupC_DeepSeek-V3-P001"
-    "GLM-4-Plus-P002|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupC_GLM-4-Plus-P002"
-    "deepseek-chat|deepseek_platform|DEEPSEEK_PLATFORM_API_KEY|DEEPSEEK_PLATFORM_BASE_URL|GroupC_DeepSeek_V3"
-    "deepseek-reasoner|deepseek_platform|DEEPSEEK_PLATFORM_API_KEY|DEEPSEEK_PLATFORM_BASE_URL|GroupC_DeepSeek_R1"
-
-    "DeepSeek-R1-N011-Distill-Llama-8B|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupD_DeepSeek-R1-N011-Distill-Llama-8B"
-    "DeepSeek-R1-N011-Distill-Qwen-14B|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupD_DeepSeek-R1-N011-Distill-Qwen-14B"
-    "DeepSeek-R1-N011-Distill-Qwen-32B|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupD_DeepSeek-R1-N011-Distill-Qwen-32B"
+    # D. Specific Features/Distilled
+    "DeepSeek-R1-N011-Distill-Llama-8B|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupD"
+    "DeepSeek-R1-N011-Distill-Qwen-14B|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupD"
+    "DeepSeek-R1-N011-Distill-Qwen-32B|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL|GroupD"
 )
 
 # --- Script Execution ---
-PYTHON_EXECUTABLE="python" # Or "python3"
+PYTHON_EXECUTABLE="python3" # Ensure this is python3 if needed
 MAIN_SCRIPT_PATH="src/main_experiment.py"
+BASELINE_SCRIPT_PATH="src/baseline_evaluator.py"
 
-# Optional: Skip data preprocessing if you are sure it's done
-# SKIP_PREPROCESSING_ARG="--skip_data_preprocessing"
-SKIP_PREPROCESSING_ARG=""
-SKIP_SVM_ARG="--skip_svm_baseline" # Usually good to skip SVM during LLM grid search
+# Create results directory
+mkdir -p "$RESULTS_DIR_MAIN_EXP"
+echo "Main experiment results will be saved in: $RESULTS_DIR_MAIN_EXP"
+echo "LLM results CSV: $LLM_RESULTS_CSV"
+echo "Baseline results CSV: $BASELINE_RESULTS_CSV"
 
-# Create root results directory if it doesn't exist
-mkdir -p "$ROOT_RESULTS_DIR"
+# --- Run LLM Experiments ---
+echo ""
+echo "**********************************************************************"
+echo "Starting LLM Comparative Experiments"
+echo "**********************************************************************"
 
-# Loop through each FSL scenario
-for scenario in "${FSL_SCENARIOS[@]}"; do
-    IFS=',' read -r k_shot q_shot <<< "$scenario"
-
+for k_shot in "${K_SHOT_VALUES[@]}"; do
     echo ""
-    echo "**********************************************************************"
-    echo "Starting FSL Scenario: N=${DEFAULT_N_WAY}, K-support=${k_shot}, Q-query=${q_shot}"
-    echo "**********************************************************************"
+    echo "===== Running for K-Shot (Support) = $k_shot ====="
 
-    # Loop through each model configuration
     for model_config in "${MODELS_TO_TEST[@]}"; do
         IFS='|' read -r model_name api_provider api_key_var_name url_or_endpoint_var_name group_tag <<< "$model_config"
 
-        # Dynamically get the API key and URL/Endpoint values
         current_api_key="${!api_key_var_name}"
         current_url_or_endpoint="${!url_or_endpoint_var_name}"
 
-        experiment_tag_final="${group_tag}_N${DEFAULT_N_WAY}_K${k_shot}_Q${q_shot}"
+        # Experiment tag combines group and K-shot for clarity in results folder structure
+        experiment_tag_final="${group_tag}_K${k_shot}"
 
-        # Prepare command line arguments
-        CMD_ARGS=(
+        CMD_ARGS_LLM=(
             "--model_name" "$model_name"
             "--api_provider" "$api_provider"
             "--api_key" "$current_api_key"
             "--dataset_key" "$DEFAULT_DATASET_KEY"
             "--n_way" "$DEFAULT_N_WAY"
             "--k_shot_support" "$k_shot"
-            "--q_shot_query" "$q_shot"
+            "--q_shot_query" "$DEFAULT_Q_QUERY" # Q=1
             "--num_fsl_tasks" "$DEFAULT_NUM_FSL_TASKS"
             "--experiment_tag" "$experiment_tag_final"
+            "--output_csv_llm" "$LLM_RESULTS_CSV"
+            "--results_base_dir" "$RESULTS_DIR_MAIN_EXP" # Base for prompts/responses folders
+            # Using default consistency (1 path) and SC settings for main comparison
         )
 
         if [ "$api_provider" == "google" ]; then
-            CMD_ARGS+=("--google_api_endpoint" "$current_url_or_endpoint")
-        elif [ -n "$current_url_or_endpoint" ]; then # Only add base_url if it's not empty
-             CMD_ARGS+=("--base_url" "$current_url_or_endpoint")
+            CMD_ARGS_LLM+=("--google_api_endpoint" "$current_url_or_endpoint")
+        elif [ -n "$current_url_or_endpoint" ]; then
+            CMD_ARGS_LLM+=("--base_url" "$current_url_or_endpoint")
         fi
 
         if [ "$DEFAULT_LIMIT_TEST_SAMPLES" != "None" ]; then
-            CMD_ARGS+=("--limit_test_samples" "$DEFAULT_LIMIT_TEST_SAMPLES")
+            CMD_ARGS_LLM+=("--limit_test_samples" "$DEFAULT_LIMIT_TEST_SAMPLES")
         fi
 
-        if [ -n "$SKIP_PREPROCESSING_ARG" ]; then
-             CMD_ARGS+=($SKIP_PREPROCESSING_ARG)
+        # For the first run of a model ONLY, force data preprocessing if needed
+        # This is a simple way; more robust would be to check if SC files for default params exist
+        if [[ "$k_shot" == "${K_SHOT_VALUES[0]}" ]]; then # Only for the first K-shot value
+             CMD_ARGS_LLM+=("--force_data_preprocessing") # Ensures data is ready with default SC params
         fi
-        if [ -n "$SKIP_SVM_ARG" ]; then
-             CMD_ARGS+=($SKIP_SVM_ARG)
-        fi
+
 
         echo ""
-        echo "----------------------------------------------------------------------"
-        echo "Executing: Model=$model_name, Provider=$api_provider, Scenario: K=$k_shot, Q=$q_shot"
-        echo "Experiment Tag: $experiment_tag_final"
-        echo "Command: $PYTHON_EXECUTABLE $MAIN_SCRIPT_PATH ${CMD_ARGS[*]}"
-        echo "----------------------------------------------------------------------"
+        echo "--- LLM RUN: Model=$model_name, K=$k_shot, Tag=$experiment_tag_final ---"
+        echo "CMD: $PYTHON_EXECUTABLE $MAIN_SCRIPT_PATH ${CMD_ARGS_LLM[*]}"
 
-        # Execute the Python script
-        "$PYTHON_EXECUTABLE" "$MAIN_SCRIPT_PATH" "${CMD_ARGS[@]}"
+        "$PYTHON_EXECUTABLE" "$MAIN_SCRIPT_PATH" "${CMD_ARGS_LLM[@]}"
 
         EXIT_CODE=$?
         if [ $EXIT_CODE -ne 0 ]; then
-            echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-            echo "ERROR: Experiment for $model_name (K=$k_shot, Q=$q_shot) failed with exit code $EXIT_CODE."
-            echo "Please check the logs."
-            echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-            # Decide if you want to continue or stop the script on error
-            # read -p "Press Enter to continue or Ctrl+C to abort..."
+            echo "ERROR: LLM Experiment for $model_name (K=$k_shot) failed. Exit code $EXIT_CODE."
         else
-            echo "Successfully completed: $model_name (K=$k_shot, Q=$q_shot)"
+            echo "Completed LLM: $model_name (K=$k_shot)"
         fi
-        echo "----------------------------------------------------------------------"
-        # Optional: Add a small delay to avoid overwhelming APIs or file systems
         sleep 5
     done # End model loop
-done # End scenario loop
+done # End K-shot loop for LLMs
+
+# --- Run Baseline Experiments ---
+# Baselines are run once as they don't depend on K-shot in the same way.
+# They use the full meta-train/meta-test with default SC parameters.
+echo ""
+echo "**********************************************************************"
+echo "Starting Baseline Model Experiments"
+echo "**********************************************************************"
+
+BASELINE_MODELS_FEATURES=(
+    "SVM|raw_hrrp"
+    "SVM|scattering_centers"
+    "RF|scattering_centers" # Random Forest with SC features
+)
+
+# Ensure data is preprocessed with default SC settings if not already done
+# (The first LLM run with K_SHOT_VALUES[0] and --force_data_preprocessing should have handled this)
+# If you want to be absolutely sure:
+# "$PYTHON_EXECUTABLE" "$MAIN_SCRIPT_PATH" --model_name "dummy" --api_provider "openai" --api_key "none" --force_data_preprocessing --num_fsl_tasks 0 --dataset_key "$DEFAULT_DATASET_KEY" > /dev/null 2>&1
+# This is a bit hacky; better to rely on the first LLM run.
+
+for baseline_config in "${BASELINE_MODELS_FEATURES[@]}"; do
+    IFS='|' read -r model_type feature_type <<< "$baseline_config"
+
+    CMD_ARGS_BASELINE=(
+        "--dataset_key" "$DEFAULT_DATASET_KEY"
+        "--model_type" "$model_type"
+        "--feature_type" "$feature_type"
+        "--output_csv" "$BASELINE_RESULTS_CSV"
+    )
+
+    echo ""
+    echo "--- BASELINE RUN: Model=$model_type, Features=$feature_type ---"
+    echo "CMD: $PYTHON_EXECUTABLE $BASELINE_SCRIPT_PATH ${CMD_ARGS_BASELINE[*]}"
+
+    "$PYTHON_EXECUTABLE" "$BASELINE_SCRIPT_PATH" "${CMD_ARGS_BASELINE[@]}"
+
+    EXIT_CODE=$?
+    if [ $EXIT_CODE -ne 0 ]; then
+        echo "ERROR: Baseline Experiment for $model_type ($feature_type) failed. Exit code $EXIT_CODE."
+    else
+        echo "Completed Baseline: $model_type ($feature_type)"
+    fi
+    sleep 2
+done
+
 
 echo ""
 echo "**********************************************************************"
-echo "All experiments defined in the script have been attempted."
+echo "All Main Comparative Experiments Attempted."
+echo "LLM results are in: $LLM_RESULTS_CSV"
+echo "Baseline results are in: $BASELINE_RESULTS_CSV"
+echo "Detailed run outputs (prompts/responses) are in subfolders of: $RESULTS_DIR_MAIN_EXP"
 echo "**********************************************************************"
