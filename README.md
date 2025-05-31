@@ -3,9 +3,9 @@ This repository provides the codes for HRRPLLM submitted to IEEE SPL 2025.
 
  ---
 
-> FDiverging from conventional methods requiring extensive task-specific training or fine-tuning, our approach converts one-dimensional HRRP signals into textual scattering center representations. These are then directly processed by an LLM, which performs target recognition via few-shot in-context learning, effectively leveraging its vast pre-existing knowledge without any parameter update. As the first work to utilize general-purpose LLMs directly to HRRP target recognition, our simple but effective approach generates competitive results among current HRRP ATR baselines. This opens new avenues for the domain of few-shot radar target recognition.
+> Diverging from conventional methods requiring extensive task-specific training or fine-tuning, our approach converts one-dimensional HRRP signals into textual scattering center representations. These are then directly processed by an LLM, which performs target recognition via few-shot in-context learning, effectively leveraging its vast pre-existing knowledge without any parameter update. As the first work to utilize general-purpose LLMs directly to HRRP target recognition, our simple but effective approach generates competitive results among current HRRP ATR baselines. This opens new avenues for the domain of few-shot radar target recognition.
 ><p align="center">
-  > <img src="LLMsATR.jpg">
+  > <img src="LLMsATR.jpg" width="50%">
 </p>
 
  ---
@@ -21,13 +21,6 @@ You actually don't need PyTorch, Tensorflow and etc. because our HRRPLLM is trai
 
 Set up the environment with the `requirements.txt`.
  ---
-
-## Model Weights and Data :package:
-To run the scripts, you will need the query image data and model weights:
-
-- Model weights and testing data are available for download at :link:: [Quark Drive](https://pan.quark.cn/s/d7ca67ab63e8) / [Baidu Drive](https://pan.baidu.com/s/1PW7TaLWZ5Ebs2P2Ezf2vmg?pwd=s9bc)
-- Unzip the files to the base directory (i.e., ./weights/, ./data/)
-
 
 ## A DEMO Toy Example
 
