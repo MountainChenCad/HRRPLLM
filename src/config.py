@@ -2,20 +2,20 @@
 import os
 
 # --- Dataset Configuration (Defaults) ---
-DEFAULT_DATASET_KEY = "measured"
+DEFAULT_DATASET_KEY = "simulated"
 AVAILABLE_DATASETS = {
-    # "simulated": {
-    #     "path": "datasets/simulated_hrrp",
-    #     "data_var": "CoHH",
-    #     "original_len": 1000,
-    #     "max_samples_to_load": None
-    # },
-    "measured": {
-        "path": "datasets/measured_hrrp",
-        "data_var": "hrrp",
-        "original_len": 500,
+    "simulated": {
+        "path": "datasets/simulated_hrrp",
+        "data_var": "CoHH",
+        "original_len": 1000,
         "max_samples_to_load": None
     },
+    # "measured": {
+    #     "path": "datasets/measured_hrrp",
+    #     "data_var": "hrrp",
+    #     "original_len": 500,
+    #     "max_samples_to_load": None
+    # },
 }
 TARGET_HRRP_LENGTH = 1000 
 PREPROCESS_MAT_TO_NPY = True 
@@ -64,7 +64,7 @@ DEFAULT_LLM_CALLER_PARAMS = {
     "api_retry_delay": 10,       
     "max_retries": 5           
 }
-DEFAULT_NUM_CONSISTENCY_PATHS = 3 # Default to 1 (no ensemble). Override via CLI.
+DEFAULT_NUM_CONSISTENCY_PATHS = 1 # Default to 1 (no ensemble). Override via CLI.
 DEFAULT_CONSISTENCY_TEMPERATURE = 1.0 # Temperature to use if num_consistency_paths > 1
 
 DEFAULT_API_KEY = "YOUR_DEFAULT_API_KEY_HERE"

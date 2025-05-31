@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HRRPLLM Demo - Explainable One-Shot HRRP ATR</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>HRRPLLM Demo</h1>
+        <p>This is a client-side demonstration of the HRRPLLM framework. It simulates how an LLM might process HRRP scattering center information for target recognition using In-Context Learning. No actual LLM API calls are made in this demo.</p>
+
+        <div class="prompt-section">
+            <h2>Prompt Context (Fixed)</h2>
+            <pre id="contextual-info">
+You are a radar target recognition expert, skilled at identifying target types by analyzing their scattering center characteristics.Your task is to accurately identify the target from a list of candidates based on the provided primary scattering center information (position index and relative amplitude).
+
+**Scattering Center Characteristics Overview:**
+Scattering centers are the primary regions on a target where radar echo energy is concentrated. They typically correspond to geometric discontinuities, edges, corners, or strong reflective surfaces of the target.By analyzing the number of scattering centers, their relative positions (range bin indices), and their respective relative amplitudes, one can infer the target's size, shape, and structural features.In this task, the provided scattering center information is extracted from a 1D High-Resolution Range Profile (HRRP) of length 1000 and is sorted in descending order of amplitude.The 'position index' starts counting from 0, representing the position in the original HRRP sequence.The 'relative amplitude' is normalized (e.g., the maximum value is 1).
+
+**Current Dataset and Task:**
+The data currently being analyzed originates from **simulated HRRP scattering center data**. Candidate target classes include: `Mirage2000, IDF, EA-18G`.
+
+**Reasoning Steps and Requirements:**
+1.  **Examine Test Sample Scattering Centers**: Carefully observe the data provided in the 'Test Sample Scattering Centers' section. Focus on:
+    *   The number of detected scattering centers.
+    *   The position indices and relative amplitudes of the strongest few scattering centers.
+    *   The approximate distribution pattern of scattering centers across the entire target length (0 to 999) (e.g., concentrated at the front, rear, evenly distributed, etc.).
+2.  **Reference Neighboring/Support Samples (if provided)**: Compare the scattering center features of the test sample with those of known class samples in the 'Neighboring Training Sample Reference'.
+    *   Note the known class of each reference sample and compare the similarity of its scattering center pattern to the test sample.
+3.  **Make a Comprehensive Judgment**: Based on your understanding of scattering center distribution patterns for different target types and the comparison with reference samples, determine which candidate class the test sample most closely matches.
+4.  **Output Format**:
+    *   On the first line of your response, please clearly state the predicted target class in the format: `Predicted Target Class: [Fill in one of the candidate class names here]`
+    *   In subsequent lines, briefly state your main reasons for this judgment, e.g., based on the number, position, or specific pattern of scattering centers, or similarity to a reference sample.
+
+------------------------------------
+**Neighboring Training Sample Reference (Support Set Prototypes):**
+
+--- Reference Prototype 1 ---
+Known Target Class: `Mirage2000`
+Its primary scattering center information:
+[
+  {'range index': 467, 'normalized amplitude': 1.000},
+  {'range index': 462, 'normalized amplitude': 0.706},
+  {'range index': 563, 'normalized amplitude': 0.513},
+  {'range index': 573, 'normalized amplitude': 0.459},
+  {'range index': 475, 'normalized amplitude': 0.435},
+  {'range index': 484, 'normalized amplitude': 0.395},
+  {'range index': 439, 'normalized amplitude': 0.284},
+  {'range index': 450, 'normalized amplitude': 0.262}
+]
+
+--- Reference Prototype 2 ---
+Known Target Class: `IDF`
+Its primary scattering center information:
+[
+  {'range index': 491, 'normalized amplitude': 1.000}
+]
+
+--- Reference Prototype 3 ---
+Known Target Class: `EA-18G`
+Its primary scattering center information:
+[
+  {'range index': 496, 'normalized amplitude': 1.000},
+  {'range index': 454, 'normalized amplitude': 0.610},
+  {'range index': 462, 'normalized amplitude': 0.606},
+  {'range index': 580, 'normalized amplitude': 0.572},
+  {'range index': 473, 'normalized amplitude': 0.326},
+  {'range index': 509, 'normalized amplitude': 0.270},
+  {'range index': 567, 'normalized amplitude': 0.227}
+]
+------------------------------------
+            </pre>
+        </div>
+
+        <div class="interactive-section">
+            <h2>Test Sample</h2>
+            <label for="test-scs">Enter Test Sample Scattering Centers (JSON-like format):</label>
+            <textarea id="test-scs" rows="6" cols="80">[
+  {'range index': 490, 'normalized amplitude': 1.000},
+  {'range index': 504, 'normalized amplitude': 0.210}
+]</textarea>
+            <button id="predict-button">Simulate LLM Prediction</button>
+        </div>
+
+        <div class="output-section">
+            <h2>Simulated LLM Output</h2>
+            <pre id="llm-output">Predicted Target Class: [Prediction will appear here]
+Rationale: [Rationale will appear here]</pre>
+        </div>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>

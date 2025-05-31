@@ -109,7 +109,7 @@ def run_baseline_for_dataset(dataset_key, model_type, feature_type, baseline_par
     load_res = load_processed_data(dataset_key, config_obj_for_paths, load_scattering_centers=load_sc_flag)
 
     if load_res[0] is None and load_res[2] is None:
-        print(f"Cannot load data for '{dataset_key}'. Skipping {model_type} baseline.");
+        print(f"Cannot load data for '{dataset_key}'. Skipping {model_type} baseline.")
         return
     X_tr_h, y_tr_o, X_te_h, y_te_o, X_tr_sc_l, X_te_sc_l, le, c_names = load_res
 
@@ -118,16 +118,16 @@ def run_baseline_for_dataset(dataset_key, model_type, feature_type, baseline_par
     if feature_type == "raw_hrrp":
         X_tr_clf, X_te_clf = X_tr_h, X_te_h
         if X_tr_h is None or X_tr_h.size == 0:
-            print(f"Raw HRRP training data empty for '{dataset_key}'. Cannot run {model_type} baseline.");
+            print(f"Raw HRRP training data empty for '{dataset_key}'. Cannot run {model_type} baseline.")
             return
     elif feature_type == "scattering_centers":
         if not sc_extraction_config["enabled"]:
             print(
-                f"SC extraction disabled, but baseline requested SC features. Skipping SC {model_type} for '{dataset_key}'.");
+                f"SC extraction disabled, but baseline requested SC features. Skipping SC {model_type} for '{dataset_key}'.")
             return
         if not X_tr_sc_l or (
                 X_te_h is not None and X_te_h.size > 0 and not X_te_sc_l and (y_te_o is not None and y_te_o.size > 0)):
-            print(f"SC list data incomplete for '{dataset_key}'. Cannot run SC {model_type}.");
+            print(f"SC list data incomplete for '{dataset_key}'. Cannot run SC {model_type}.")
             return
 
         max_c = sc_extraction_config["max_centers_to_keep"]
@@ -138,7 +138,7 @@ def run_baseline_for_dataset(dataset_key, model_type, feature_type, baseline_par
         if X_tr_sc_l:
             X_tr_clf = np.array([sc_set_to_feature_vector(s, max_c, sc_f_type_clf) for s in X_tr_sc_l])
         else:
-            print(f"Training SC list empty for '{dataset_key}'. Cannot run SC {model_type}.");
+            print(f"Training SC list empty for '{dataset_key}'. Cannot run SC {model_type}.")
             return
 
         if X_te_sc_l:
@@ -150,11 +150,11 @@ def run_baseline_for_dataset(dataset_key, model_type, feature_type, baseline_par
         else:
             X_te_clf = np.array([])
     else:
-        print(f"Unknown baseline feature type: {feature_type}. Skipping {model_type}.");
+        print(f"Unknown baseline feature type: {feature_type}. Skipping {model_type}.")
         return
 
     if y_tr_o is None or y_tr_o.size == 0:
-        print(f"Training labels empty for '{dataset_key}'. Skipping {model_type}.");
+        print(f"Training labels empty for '{dataset_key}'. Skipping {model_type}.")
         return
 
     y_tr_e = le.transform(y_tr_o)
@@ -221,6 +221,8 @@ def main():
         RANDOM_STATE = RANDOM_STATE  # Needed by load_processed_data indirectly
         # These SC configs are what load_processed_data checks
         sc_extraction_config = DEFAULT_SC_EXTRACTION_CONFIG
+        # Add the SCATTERING_CENTER_EXTRACTION attribute for compatibility
+        SCATTERING_CENTER_EXTRACTION = DEFAULT_SC_EXTRACTION_CONFIG
         # The following are not directly used by load_processed_data but good to have for consistency
         # if other utils are called that might expect them.
         TEST_SPLIT_SIZE = TEST_SPLIT_SIZE
@@ -242,8 +244,19 @@ def main():
     # Ensure feature_type from CLI is consistent with what's in baseline_params_to_use
     # The feature_type for SC vector construction is handled inside run_baseline_for_dataset
 
-    # Create output directory if it doesn't exist
-    os.makedirs(os.path.dirname(args.output_csv), exist_ok=True)
+    # FIX: Create output directory more carefully
+    output_dir = os.path.dirname(args.output_csv)
+    if output_dir:  # Only create if dirname is not empty
+        os.makedirs(output_dir, exist_ok=True)
+    else:
+        # If output_csv is just a filename without directory, use current directory
+        # or create a default results directory
+        if '/' not in args.output_csv and '\\' not in args.output_csv:
+            # It's just a filename, put it in a default results directory
+            default_results_dir = "results"
+            os.makedirs(default_results_dir, exist_ok=True)
+            args.output_csv = os.path.join(default_results_dir, args.output_csv)
+            print(f"Output CSV will be saved to: {args.output_csv}")
 
     run_baseline_for_dataset(
         args.dataset_key,

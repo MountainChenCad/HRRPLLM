@@ -5,8 +5,8 @@ echo "Starting Ablation Experiments Script"
 # --- Base Configuration for Ablation ---
 DEFAULT_N_WAY=3
 DEFAULT_Q_QUERY=1
-DEFAULT_NUM_FSL_TASKS=30 # Fewer tasks for faster ablation
-DEFAULT_DATASET_KEY="measured"
+DEFAULT_NUM_FSL_TASKS=15 # Fewer tasks for faster ablation
+DEFAULT_DATASET_KEY="simulated"
 DEFAULT_LIMIT_TEST_SAMPLES="None"
 RESULTS_DIR_ABLATION="results_ablation" # Specific directory for ablation results
 ABLATION_RESULTS_CSV="${RESULTS_DIR_ABLATION}/llm_ablation_results.csv"
@@ -32,12 +32,21 @@ GOOGLE_PROXY_API_ENDPOINT="https://api.openai-proxy.live/google"
 ABLATION_MODELS=(
 
     # Add one more if desired, e.g., a Claude or Gemini model
+#    "claude-opus-4-0|anthropic|PROXY_API_KEY|ANTHROPIC_PROXY_BASE_URL"
+#    "claude-sonnet-4-20250514|anthropic|PROXY_API_KEY|ANTHROPIC_PROXY_BASE_URL"
+    "claude-3-7-sonnet-20250219|anthropic|PROXY_API_KEY|ANTHROPIC_PROXY_BASE_URL"
+#    "claude-3-5-sonnet-20241022|anthropic|PROXY_API_KEY|ANTHROPIC_PROXY_BASE_URL"
+    "gpt-4.1-2025-04-14|openai|PROXY_API_KEY|OPENAI_PROXY_BASE_URL"
+    "o4-mini-2025-04-16|openai|PROXY_API_KEY|OPENAI_PROXY_BASE_URL"
+
+#    "gemini-2.5-pro-preview-03-25|google|PROXY_API_KEY|GOOGLE_PROXY_API_ENDPOINT"
+
+#    "claude-3-sonnet-20240229|anthropic|PROXY_API_KEY|ANTHROPIC_PROXY_BASE_URL"
 #    "gpt-4o-mini|openai|PROXY_API_KEY|OPENAI_PROXY_BASE_URL"
 #    "deepseek-chat|deepseek_platform|DEEPSEEK_PLATFORM_API_KEY|DEEPSEEK_PLATFORM_BASE_URL"
-#    "claude-3-sonnet-20240229|anthropic|PROXY_API_KEY|ANTHROPIC_PROXY_BASE_URL"
-    "Qwen3-235B-A22B|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL"
-    "GLM-4-Plus-P002|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL"
-    "gemini-1.5-pro-latest|google|PROXY_API_KEY|GOOGLE_PROXY_API_ENDPOINT"
+#    "Qwen3-235B-A22B|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL"
+#    "GLM-4-Plus-P002|zhipuai_glm|CHAOSUAN_PLATFORM_API_KEY|CHAOSUAN_BASE_URL"
+#    "gemini-1.5-pro-latest|google|PROXY_API_KEY|GOOGLE_PROXY_API_ENDPOINT"
 )
 
 mkdir -p "$RESULTS_DIR_ABLATION"
@@ -170,17 +179,17 @@ for model_config in "${ABLATION_MODELS[@]}"; do
     run_ablation_experiment "$mn" "$ap" "$ak" "$ue" "$K_FIVE_SHOT" "KShot${K_FIVE_SHOT}" ""
 done
 
-# === 4. Consistency / Multi-path Ensemble Enhancement (using K=1, Full Prompt) ===
-K_CONSISTENCY=3
-CONSISTENCY_PATHS=(1 5) # Test with 3 and 5 paths
-CONSISTENCY_TEMP=1.0 # Use a higher temperature for diversity
-for model_config in "${ABLATION_MODELS[@]}"; do
-    IFS='|' read -r mn ap ak ue <<< "$model_config"
-    for num_paths in "${CONSISTENCY_PATHS[@]}"; do
-        cli_arg_consistency="--num_consistency_paths $num_paths --consistency_temperature $CONSISTENCY_TEMP"
-        run_ablation_experiment "$mn" "$ap" "$ak" "$ue" "$K_CONSISTENCY" "Consistency${num_paths}Paths" "$cli_arg_consistency"
-    done
-done
+## === 4. Consistency / Multi-path Ensemble Enhancement (using K=1, Full Prompt) ===
+#K_CONSISTENCY=1
+#CONSISTENCY_PATHS=(1 5) # Test with 3 and 5 paths
+#CONSISTENCY_TEMP=1.0 # Use a higher temperature for diversity
+#for model_config in "${ABLATION_MODELS[@]}"; do
+#    IFS='|' read -r mn ap ak ue <<< "$model_config"
+#    for num_paths in "${CONSISTENCY_PATHS[@]}"; do
+#        cli_arg_consistency="--num_consistency_paths $num_paths --consistency_temperature $CONSISTENCY_TEMP"
+#        run_ablation_experiment "$mn" "$ap" "$ak" "$ue" "$K_CONSISTENCY" "Consistency${num_paths}Paths" "$cli_arg_consistency"
+#    done
+#done
 
 
 echo ""

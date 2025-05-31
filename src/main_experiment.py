@@ -379,9 +379,7 @@ def run_fsl_experiment_main(current_config):
 
 def main():
     parser = argparse.ArgumentParser(description="Run HRRP FSL experiments with LLMs, including ablations.")
-    # ... (argparse setup remains largely the same as previous version)
-    # Make sure to add --num_consistency_paths and --consistency_temperature
-    # And --output_csv_llm for the results file path
+    # ... (all argparse arguments remain the same)
     parser.add_argument("--model_name", type=str, required=True)
     parser.add_argument("--api_key", type=str, required=True)
     parser.add_argument("--api_provider", type=str, required=True,
@@ -398,8 +396,8 @@ def main():
     parser.add_argument("--max_tokens_completion", type=int, default=DEFAULT_LLM_CALLER_PARAMS["max_tokens_completion"])
     parser.add_argument("--limit_test_samples", type=int, default=None)
     parser.add_argument("--force_data_preprocessing", action='store_true')
-    parser.add_argument("--skip_svm_baseline", action='store_true')  # For main script, SVM is run by bash
-    parser.add_argument("--skip_rf_baseline", action='store_true')  # For main script, RF is run by bash
+    # parser.add_argument("--skip_svm_baseline", action='store_true') # This flag is for the bash script now
+    # parser.add_argument("--skip_rf_baseline", action='store_true')  # This flag is for the bash script now
 
     parser.add_argument("--prompt_no_system_instruction", action='store_true')
     parser.add_argument("--prompt_no_background_knowledge", action='store_true')
@@ -407,8 +405,6 @@ def main():
     parser.add_argument("--prompt_no_output_format", action='store_true')
     parser.add_argument("--sc_max_centers_to_keep", type=int, default=None)
     parser.add_argument("--sc_encoding_precision_amp", type=int, default=None)
-
-    # New CLI args for consistency and output file
     parser.add_argument("--num_consistency_paths", type=int, default=DEFAULT_NUM_CONSISTENCY_PATHS)
     parser.add_argument("--consistency_temperature", type=float, default=DEFAULT_CONSISTENCY_TEMPERATURE)
     parser.add_argument("--output_csv_llm", type=str, default="results/llm_experiments_log.csv",
@@ -418,9 +414,9 @@ def main():
 
     args = parser.parse_args()
 
+    # --- CurrentRunConfig class definition (ensure it's here or imported) ---
     class CurrentRunConfig:
         def __init__(self, cli_args):
-            # ... (Initialization largely same, add new args)
             self.dataset_key = cli_args.dataset_key
             self.AVAILABLE_DATASETS = AVAILABLE_DATASETS
             self.TARGET_HRRP_LENGTH = TARGET_HRRP_LENGTH
@@ -433,9 +429,13 @@ def main():
             self.TEST_SPLIT_SIZE = TEST_SPLIT_SIZE
             self.RANDOM_STATE = RANDOM_STATE
 
+            # Set up scattering center extraction config
             self.sc_extraction_config = {**DEFAULT_SC_EXTRACTION_CONFIG}
             if cli_args.sc_max_centers_to_keep is not None:
                 self.sc_extraction_config["max_centers_to_keep"] = cli_args.sc_max_centers_to_keep
+
+            # IMPORTANT: Add SCATTERING_CENTER_EXTRACTION as an alias for compatibility
+            self.SCATTERING_CENTER_EXTRACTION = self.sc_extraction_config
 
             self.sc_encoding_config = {**DEFAULT_SC_ENCODING_CONFIG}
             if cli_args.sc_encoding_precision_amp is not None:
@@ -447,7 +447,8 @@ def main():
                 "q_shot_query": cli_args.q_shot_query, "num_fsl_tasks": cli_args.num_fsl_tasks,
                 "sc_feature_type_for_prototype": DEFAULT_FSL_TASK_SETUP["sc_feature_type_for_prototype"]
             }
-            self.llm_caller_params = {  # Base params, temperature might be overridden for consistency
+
+            self.llm_caller_params = {
                 "temperature": cli_args.temperature, "top_p": DEFAULT_LLM_CALLER_PARAMS["top_p"],
                 "max_tokens_completion": cli_args.max_tokens_completion,
                 "frequency_penalty": DEFAULT_LLM_CALLER_PARAMS["frequency_penalty"],
@@ -455,6 +456,7 @@ def main():
                 "api_retry_delay": DEFAULT_LLM_CALLER_PARAMS["api_retry_delay"],
                 "max_retries": DEFAULT_LLM_CALLER_PARAMS["max_retries"]
             }
+
             self.model_name = cli_args.model_name
             self.api_key = cli_args.api_key
             self.api_provider = cli_args.api_provider
@@ -463,7 +465,7 @@ def main():
 
             self.limit_test_samples = cli_args.limit_test_samples if cli_args.limit_test_samples is not None else DEFAULT_LIMIT_TEST_SAMPLES
 
-            self.RESULTS_BASE_DIR = cli_args.results_base_dir  # Use CLI arg for this
+            self.RESULTS_BASE_DIR = cli_args.results_base_dir
 
             self.experiment_tag = cli_args.experiment_tag
 
@@ -478,43 +480,52 @@ def main():
 
     config_obj = CurrentRunConfig(args)
 
-    # Ensure the directory for the output CSV exists
     os.makedirs(os.path.dirname(config_obj.output_csv_llm), exist_ok=True)
 
-    # --- Data Preprocessing ---
+    start_time_total = datetime.now()
+
     if config_obj.PREPROCESS_MAT_TO_NPY:
         print("\n--- Step 0: Preparing/Re-preparing .npy HRRP data and SC .pkl files ---")
-        prepare_npy_data_and_scattering_centers(config_obj)  # Processes all datasets in AVAILABLE_DATASETS
+        prepare_npy_data_and_scattering_centers(config_obj)
     else:
         print("\n--- Step 0: Skipping data preprocessing. Using existing files. ---")
 
-    # --- Run FSL LLM Experiment ---
     if config_obj.sc_extraction_config["enabled"] and config_obj.fsl_setup["enabled"]:
-        experiment_results_row = run_fsl_experiment_main(config_obj)
-
-        if experiment_results_row:  # If experiment ran successfully and returned data
-            fieldnames = [
-                'dataset_key', 'model_name', 'api_provider', 'experiment_tag',
-                'n_way', 'k_shot_support', 'q_shot_query', 'num_fsl_tasks',
-                'limit_test_samples', 'temperature_llm', 'max_tokens_completion',
-                'num_consistency_paths',
-                'prompt_sys_instr', 'prompt_bg_know', 'prompt_cand_list', 'prompt_out_fmt',
-                'sc_max_centers', 'sc_amp_prec',
-                'accuracy', 'f1_macro', 'valid_preds_count', 'total_queries_eval', 'total_llm_api_calls'
-            ]
-            file_exists = os.path.isfile(config_obj.output_csv_llm)
-            with open(config_obj.output_csv_llm, 'a', newline='') as csvfile:
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                if not file_exists or os.path.getsize(config_obj.output_csv_llm) == 0:  # Check size for empty file too
-                    writer.writeheader()
-                writer.writerow(experiment_results_row)
-            print(f"LLM experiment results appended to {config_obj.output_csv_llm}")
+        if args.num_fsl_tasks == 0 and args.model_name == "dummy_preprocess_check":  # Special case for bash script's preprocess check
+            print("Preprocessing check complete (num_fsl_tasks is 0). Skipping LLM run.")
         else:
-            print("LLM experiment did not yield results to save to CSV.")
+            experiment_results_row = run_fsl_experiment_main(config_obj)
+            if experiment_results_row:
+                fieldnames = [
+                    'dataset_key', 'model_name', 'api_provider', 'experiment_tag',
+                    'n_way', 'k_shot_support', 'q_shot_query', 'num_fsl_tasks',
+                    'limit_test_samples', 'temperature_llm', 'max_tokens_completion',
+                    'num_consistency_paths',
+                    'prompt_sys_instr', 'prompt_bg_know', 'prompt_cand_list', 'prompt_out_fmt',
+                    'sc_max_centers', 'sc_amp_prec',
+                    'accuracy', 'f1_macro', 'valid_preds_count', 'total_queries_eval', 'total_llm_api_calls'
+                ]
+                file_exists = os.path.isfile(config_obj.output_csv_llm)
+                with open(config_obj.output_csv_llm, 'a', newline='') as csvfile:
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    if not file_exists or os.path.getsize(config_obj.output_csv_llm) == 0:
+                        writer.writeheader()
+                    writer.writerow(experiment_results_row)
+                print(f"LLM experiment results appended to {config_obj.output_csv_llm}")
+            else:
+                print("LLM experiment did not yield results to save to CSV.")
 
-    # Baselines (SVM, RF) are run by the bash script by calling baseline_evaluator.py directly
+    # --- REMOVED DIRECT BASELINE CALLS FROM HERE ---
+    # The bash scripts (run_experiments.sh / ablation.sh) will call
+    # src/baseline_evaluator.py directly.
+    # if config_obj.RUN_BASELINE_SVM: # This logic is now in the bash script
+    #     try:
+    #         print(f"\n--- Running SVM Baseline for dataset '{config_obj.dataset_key}' ---")
+    #         run_svm_baseline_for_dataset(config_obj.dataset_key, config_obj) # THIS WAS THE PROBLEMATIC CALL
+    #     except Exception as e: print(f"Error running SVM baseline for {config_obj.dataset_key}: {e}")
 
-    print(f"\nRun for {config_obj.model_name} with tag '{config_obj.experiment_tag}' finished.")
+    print(
+        f"\nRun for {config_obj.model_name} with tag '{config_obj.experiment_tag}' finished. Total time: {datetime.now() - start_time_total}")
 
 
 if __name__ == "__main__":

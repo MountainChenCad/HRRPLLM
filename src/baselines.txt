@@ -1,0 +1,107 @@
+Results saved to: test_results/baseline_test_results.csv
+First few lines of results:
+dataset_key,model_type,feature_type,accuracy,f1_macro,report_dict_json
+measured,SVM,raw_hrrp,0.9952,0.9952,"{""an26"": {""precision"": 0.98856416772554, ""recall"": 0.9974358974358974, ""f1-score"": 0.9929802169751116, ""support"": 7020.0}, ""citation"": {""precision"": 0.9974274689152494, ""recall"": 0.9941595441595441, ""f1-score"": 0.9957908254262681, ""support"": 7020.0}, ""yar42"": {""precision"": 0.9997134670487106, ""recall"": 0.994017094017094, ""f1-score"": 0.9968571428571429, ""support"": 7020.0}, ""accuracy"": 0.9952041785375119, ""macro avg"": {""precision"": 0.9952350345631666, ""recall"": 0.9952041785375118, ""f1-score"": 0.9952093950861741, ""support"": 21060.0}, ""weighted avg"": {""precision"": 0.9952350345631665, ""recall"": 0.9952041785375119, ""f1-score"": 0.9952093950861742, ""support"": 21060.0}}"
+=== FINISHED BASELINE ONLY TEST ===
+(ao_detr_env_v2) mount@mountPad:~/HRRPLLM_WSL$ bash baselines.sh
+bash: /home/mount/miniconda3/lib/libtinfo.so.6: no version information available (required by bash)
+=== STARTING FSL BASELINE TEST ===
+Current time: Fri May 30 19:34:53 CST 2025
+Working directory: /home/mount/HRRPLLM_WSL
+
+FSL Configuration:
+  Dataset: measured
+  N-way: 3
+  K-shot: 1 (training samples per class)
+  Q-shot: 1 (query samples per class)
+  Number of tasks: 30
+
+--- Running FSL SVM with raw HRRP features ---
+
+--- Running FSL SVM Baseline ---
+Dataset: measured, Feature: raw_hrrp
+FSL Setup: 3-way, 1-shot
+Building 30 FSL tasks...
+警告 (build_fsl_tasks): HRRP数据池 (21060) 和SC列表 (0) 长度不匹配。
+Successfully built 30 FSL tasks.
+Running SVM on FSL tasks: 100%|██████████████████████████████████████████████████████████████████████████████████████████████| 30/30 [00:00<00:00, 498.08it/s]
+
+SVM FSL Results:
+  Mean Accuracy: 0.5333 ± 0.2802
+  Mean F1-Score: 0.4593 ± 0.2818
+  Valid tasks: 30/30
+Results saved to results/fsl_baseline/fsl_baseline_results.csv
+
+--- Running FSL SVM with scattering centers ---
+
+--- Running FSL SVM Baseline ---
+Dataset: measured, Feature: scattering_centers
+FSL Setup: 3-way, 1-shot
+Building 30 FSL tasks...
+Successfully built 30 FSL tasks.
+Running SVM on FSL tasks: 100%|██████████████████████████████████████████████████████████████████████████████████████████████| 30/30 [00:00<00:00, 496.48it/s]
+
+SVM FSL Results:
+  Mean Accuracy: 0.5222 ± 0.2225
+  Mean F1-Score: 0.4222 ± 0.2347
+  Valid tasks: 30/30
+Results saved to results/fsl_baseline/fsl_baseline_results.csv
+
+--- Running FSL RF with scattering centers ---
+
+--- Running FSL RF Baseline ---
+Dataset: measured, Feature: scattering_centers
+FSL Setup: 3-way, 1-shot
+Building 30 FSL tasks...
+Successfully built 30 FSL tasks.
+Running RF on FSL tasks: 100%|████████████████████████████████████████████████████████████████████████████████████████████████| 30/30 [00:01<00:00, 18.09it/s]
+
+RF FSL Results:
+  Mean Accuracy: 0.5556 ± 0.2629
+  Mean F1-Score: 0.4685 ± 0.2762
+  Valid tasks: 30/30
+Results saved to results/fsl_baseline/fsl_baseline_results.csv
+
+=== FSL BASELINE TEST COMPLETED ===
+
+Results summary:
+dataset_key  model_type  feature_type        n_way  k_shot  q_shot  num_tasks  mean_accuracy  std_accuracy  mean_f1  std_f1  valid_tasks  total_tasks
+measured     SVM         raw_hrrp            3      1       1       30         0.5333         0.2802        0.4593   0.2818  30           30
+measured     SVM         scattering_centers  3      1       1       30         0.5222         0.2225        0.4222   0.2347  30           30
+measured     RF          scattering_centers  3      1       1       30         0.5556         0.2629        0.4685   0.2762  30           30
+(ao_detr_env_v2) mount@mountPad:~/HRRPLLM_WSL$ bash baselines.sh
+bash: /home/mount/miniconda3/lib/libtinfo.so.6: no version information available (required by bash)
+=== STARTING FSL BASELINE TEST ===
+Current time: Fri May 30 20:26:50 CST 2025
+Working directory: /home/mount/HRRPLLM_WSL
+
+FSL Configuration:
+  Dataset: simulated
+  N-way: 3
+  K-shot: 1 (training samples per class)
+  Q-shot: 1 (query samples per class)
+  Number of tasks: 30
+
+--- Running FSL SVM with raw HRRP features ---
+
+--- Running FSL SVM Baseline ---
+Dataset: simulated, Feature: raw_hrrp
+FSL Setup: 3-way, 1-shot
+Building 30 FSL tasks...
+警告 (build_fsl_tasks): HRRP数据池 (4320) 和SC列表 (0) 长度不匹配。
+Successfully built 30 FSL tasks.
+Running SVM on FSL tasks: 100%|██████████████████████████████████████████████████████████████████████████████████████████████| 30/30 [00:00<00:00, 494.63it/s]
+
+SVM FSL Results:
+  Mean Accuracy: 0.6222 ± 0.2948
+  Mean F1-Score: 0.5444 ± 0.3368
+  Valid tasks: 30/30
+Results saved to results/fsl_baseline/fsl_baseline_results.csv
+
+--- Running FSL SVM with scattering centers ---
+
+--- Running FSL SVM Baseline ---
+Dataset: simulated, Feature: scattering_centers
+FSL Setup: 3-way, 1-shot
+Building 30 FSL tasks...
+simulated    RF          scattering_centers  3      1       1       30         0.5444         0.3041        0.4722   0.3076  30           30
