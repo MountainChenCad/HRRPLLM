@@ -6,7 +6,7 @@ echo "Starting Ablation Experiments Script"
 DEFAULT_N_WAY=3
 DEFAULT_Q_QUERY=1
 DEFAULT_NUM_FSL_TASKS=15 # Fewer tasks for faster ablation
-DEFAULT_DATASET_KEY="simulated"
+DEFAULT_DATASET_KEY="measured"
 DEFAULT_LIMIT_TEST_SAMPLES="None"
 RESULTS_DIR_ABLATION="results_ablation" # Specific directory for ablation results
 ABLATION_RESULTS_CSV="${RESULTS_DIR_ABLATION}/llm_ablation_results.csv"
@@ -32,9 +32,9 @@ GOOGLE_PROXY_API_ENDPOINT="https://api.openai-proxy.live/google"
 ABLATION_MODELS=(
 
     # Add one more if desired, e.g., a Claude or Gemini model
-#    "claude-opus-4-0|anthropic|PROXY_API_KEY|ANTHROPIC_PROXY_BASE_URL"
+    "claude-opus-4-0|anthropic|PROXY_API_KEY|ANTHROPIC_PROXY_BASE_URL"
 #    "claude-sonnet-4-20250514|anthropic|PROXY_API_KEY|ANTHROPIC_PROXY_BASE_URL"
-    "claude-3-7-sonnet-20250219|anthropic|PROXY_API_KEY|ANTHROPIC_PROXY_BASE_URL"
+#    "claude-3-7-sonnet-20250219|anthropic|PROXY_API_KEY|ANTHROPIC_PROXY_BASE_URL"
 #    "claude-3-5-sonnet-20241022|anthropic|PROXY_API_KEY|ANTHROPIC_PROXY_BASE_URL"
     "gpt-4.1-2025-04-14|openai|PROXY_API_KEY|OPENAI_PROXY_BASE_URL"
     "o4-mini-2025-04-16|openai|PROXY_API_KEY|OPENAI_PROXY_BASE_URL"
@@ -132,7 +132,7 @@ PROMPT_ABLATIONS=(
     "NoBgKnow|--prompt_no_background_knowledge"
     "NoCandList|--prompt_no_candidate_list"
     "NoOutFmt|--prompt_no_output_format"
-    "NoSys_NoCand_NoFmt|--prompt_no_system_instruction --prompt_no_candidate_list --prompt_no_output_format"
+#    "NoSys_NoCand_NoFmt|--prompt_no_system_instruction --prompt_no_candidate_list --prompt_no_output_format"
 )
 for model_config in "${ABLATION_MODELS[@]}"; do
     IFS='|' read -r mn ap ak ue <<< "$model_config"
