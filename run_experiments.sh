@@ -18,13 +18,13 @@ BASELINE_RESULTS_CSV="${RESULTS_DIR_MAIN_EXP}/baseline_results.csv"
 #K_SHOT_VALUES=(1)
 #
 ## --- API Key Configuration (Ensure these are correct) ---
-#DEEPSEEK_PLATFORM_API_KEY="sk-c46c479bff48429dbdf15094c81f086e"
+#DEEPSEEK_PLATFORM_API_KEY=""
 #DEEPSEEK_PLATFORM_BASE_URL="https://api.deepseek.com" # Ensure /v1 is added if needed by specific models/proxy
 #
-#CHAOSUAN_PLATFORM_API_KEY="sk-g0UhooVGGk8r9l3pDZjHbQ"
+#CHAOSUAN_PLATFORM_API_KEY=""
 #CHAOSUAN_BASE_URL="https://llmapi.blsc.cn/v1"
 #
-#PROXY_API_KEY="sk-fim815RQQnKhcbB7C5LbKjdkJsc7YyMjn6L6d6FReGJj5kUZ"
+#PROXY_API_KEY=""
 #OPENAI_PROXY_BASE_URL="https://api.openai-proxy.live/v1"
 #ANTHROPIC_PROXY_BASE_URL="https://api.openai-proxy.live/anthropic"
 #GOOGLE_PROXY_API_ENDPOINT="https://api.openai-proxy.live/google"
