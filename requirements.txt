@@ -2,8 +2,6 @@ numpy
 scipy
 scikit-learn
 matplotlib
-# openai # 如果还想对比可以保留
 tqdm
-torch
 transformers
 tensorboard # 可选

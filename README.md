@@ -19,7 +19,8 @@ We also recommend running the code on Linux (Our testing was done on Ubuntu 20.0
 ## Dependencies :wrench:
 You actually don't need PyTorch, Tensorflow and etc. because our HRRPLLM is training-free and based on API calling.
 
-Set up the environment with the `requirements.txt`.
+Set up the environment with the `requirements.txt`. 
+
  ---
 
 ## A DEMO Toy Example
@@ -33,7 +34,7 @@ This demo allows you to:
 
 **Important:** This demo runs entirely in your browser using JavaScript. It does **not** make actual calls to any Large Language Model API. The "LLM" responses are simulated based on a simplified comparison of the input scattering centers to the predefined prototypes. It serves to illustrate the concept and the type of information an LLM would process.
 
-### How to Run the Demo Locally
+### How to Run the DEMO Locally
 1. Clone this repository.
 2. Open the `index.html` file in your web browser.
 
