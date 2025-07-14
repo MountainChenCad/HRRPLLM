@@ -16,13 +16,13 @@ MAIN_SCRIPT_PATH="src/main_experiment.py"
 # Baselines are not typically re-run for LLM ablations unless the ablation affects data processing shared with baselines.
 
 # --- API Keys (same as run_experiments.sh) ---
-DEEPSEEK_PLATFORM_API_KEY="sk-c46c479bff48429dbdf15094c81f086e"
+DEEPSEEK_PLATFORM_API_KEY=""
 DEEPSEEK_PLATFORM_BASE_URL="https://api.deepseek.com"
 
-CHAOSUAN_PLATFORM_API_KEY="sk-g0UhooVGGk8r9l3pDZjHbQ"
+CHAOSUAN_PLATFORM_API_KEY=""
 CHAOSUAN_BASE_URL="https://llmapi.blsc.cn/v1"
 
-PROXY_API_KEY="sk-fim815RQQnKhcbB7C5LbKjdkJsc7YyMjn6L6d6FReGJj5kUZ"
+PROXY_API_KEY=""
 OPENAI_PROXY_BASE_URL="https://api.openai-proxy.live/v1"
 ANTHROPIC_PROXY_BASE_URL="https://api.openai-proxy.live/anthropic"
 GOOGLE_PROXY_API_ENDPOINT="https://api.openai-proxy.live/google"
