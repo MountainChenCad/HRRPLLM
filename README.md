@@ -1,5 +1,5 @@
 # Large Language Models Simply Achieve Explainable and Training-Free One-shot HRRP ATR :sheep:
-This repository provides the codes for HRRPLLM submitted to IEEE SPL 2025.
+This repository provides the codes for HRRPLLM, IEEE SPL 2025.
 
  ---
 
