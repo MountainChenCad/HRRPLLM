@@ -1,4 +1,4 @@
-# Large Language Models Simply Achieve Explainable and Training-Free One-shot HRRP ATR :sheep:
+# Large Language Models Simply Achieve Explainable and Training-Free One-shot HRRP ATR, IEEE_SPL_2025
 
 <div align="right">
   <a href="#english">English</a> | <a href="#chinese">中文</a>
@@ -9,7 +9,7 @@
 <a name="english"></a>
 ## English
 
-This repository provides the codes for HRRPLLM, IEEE SPL 2025.
+This repository provides the codes for HRRPLLM, IEEE_SPL_2025.
 
 > Diverging from conventional methods requiring extensive task-specific training or fine-tuning, our approach converts one-dimensional HRRP signals into textual scattering center representations. These are then directly processed by an LLM, which performs target recognition via few-shot in-context learning, effectively leveraging its vast pre-existing knowledge without any parameter update. As the first work to utilize general-purpose LLMs directly to HRRP target recognition, our simple but effective approach generates competitive results among current HRRP ATR baselines. This opens new avenues for the domain of few-shot radar target recognition.
 
